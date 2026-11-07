@@ -52,7 +52,7 @@ fun shapeOf(s: ButtonShape): Shape = when (s) {
 fun RemoteButtonView(
     button: RButton,
     remote: Remote,
-    fontSizeScale: Float = 1f,
+    fontSizePx: Float = 34f,
     modifier: Modifier = Modifier,
 ) {
     val start = parseColor(button.fillStart)
@@ -61,6 +61,9 @@ fun RemoteButtonView(
     val text = parseColor(button.textColor, Color.White)
     val border = parseColor(button.borderColor, Color.Transparent)
     val shape = shapeOf(button.shape)
+    val density = androidx.compose.ui.platform.LocalDensity.current
+    val labelSp = with(density) { (fontSizePx.coerceAtLeast(6f)).toSp() }
+    val iconSp = with(density) { (fontSizePx * 0.9f).coerceAtLeast(6f).toSp() }
     Box(
         modifier = modifier
             .fillMaxSize()
@@ -74,13 +77,13 @@ fun RemoteButtonView(
             verticalArrangement = Arrangement.Center,
         ) {
             if (button.icon.isNotEmpty()) {
-                Text(button.icon, fontSize = (button.fontSize * 0.9f * fontSizeScale).sp, color = text, lineHeight = TextUnit.Unspecified)
+                Text(button.icon, fontSize = iconSp, color = text)
             }
             if (button.label.isNotEmpty()) {
                 Text(
                     button.label,
                     color = text,
-                    fontSize = (button.fontSize * fontSizeScale).sp,
+                    fontSize = labelSp,
                     textAlign = TextAlign.Center,
                     maxLines = 2,
                 )

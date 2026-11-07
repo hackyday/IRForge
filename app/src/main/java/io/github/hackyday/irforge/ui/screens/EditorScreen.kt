@@ -167,11 +167,13 @@ fun EditorScreen(app: ForgeApp, nav: NavController, rid: String) {
                         val bh = rs?.second ?: b.h
                         val display = b.copy(x = bx, y = by, w = bw, h = bh)
                         val isSel = b.id == selectedId
+                        val bwDp = with(density) { (bw * scale).toDp() }
+                        val bhDp = with(density) { (bh * scale).toDp() }
 
                         Box(
                             Modifier
                                 .offset { androidx.compose.ui.unit.IntOffset((bx * scale).toInt(), (by * scale).toInt()) }
-                                .size(width = (bw * scale).dp, height = (bh * scale).dp)
+                                .size(width = bwDp, height = bhDp)
                                 .then(
                                     if (isSel) Modifier.border(2.dp, MaterialTheme.colorScheme.primary, shapeOf(b.shape))
                                     else Modifier,
@@ -196,7 +198,7 @@ fun EditorScreen(app: ForgeApp, nav: NavController, rid: String) {
                                 }
                                 .clickable { selectedId = b.id },
                         ) {
-                            RemoteButtonView(button = display, remote = r, fontSizeScale = scale * 1.2f, modifier = Modifier.fillMaxSize())
+                            RemoteButtonView(button = display, remote = r, fontSizePx = b.fontSize * scale, modifier = Modifier.fillMaxSize())
                         }
 
                         // Resize handle (bottom-right of the selected button)

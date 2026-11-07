@@ -220,6 +220,9 @@ private fun RemotePlayButton(
 ) {
     val interaction = remember(button.id) { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
+    val density = LocalDensity.current
+    val wDp = with(density) { (button.w * scale).toDp() }
+    val hDp = with(density) { (button.h * scale).toDp() }
 
     val gestureModifier = if (button.holdRepeat) {
         Modifier.clickable(interactionSource = interaction, indication = null) { /* send handled below */ }
@@ -237,14 +240,14 @@ private fun RemotePlayButton(
     Box(
         Modifier
             .offset { androidx.compose.ui.unit.IntOffset((button.x * scale).toInt(), (button.y * scale).toInt()) }
-            .size(width = (button.w * scale).dp, height = (button.h * scale).dp)
+            .size(width = wDp, height = hDp)
             .graphicsLayer { alpha = button.opacity.coerceIn(0.05f, 1f) }
             .then(gestureModifier),
     ) {
         RemoteButtonView(
             button = button,
             remote = remote,
-            fontSizeScale = scale * 1.2f,
+            fontSizePx = button.fontSize * scale,
             modifier = Modifier.fillMaxSize(),
         )
     }
