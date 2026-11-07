@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- USB IR blasters: Microchip/IRToy, FTDI, CH340/CH341, CP210x, Prolific, generic CDC-ACM -->
+    <usb-device vendor-id="5216" product-id="64760" />   <!-- 04d8:fd08 USB IR Toy -->
+    <usb-device vendor-id="1027" />                       <!-- 0403 FTDI -->
+    <usb-device vendor-id="6790" product-id="29987" />    <!-- 1a86:7523 CH340 -->
+    <usb-device vendor-id="6790" product-id="21795" />    <!-- 1a86:5523 CH341 -->
+    <usb-device vendor-id="4292" product-id="60000" />    <!-- 10c4:ea60 CP210x -->
+    <usb-device vendor-id="1659" product-id="8963" />     <!-- 067b:2303 Prolific -->
+    <usb-device class="2" subclass="0" protocol="0" />    <!-- CDC communications -->
+    <usb-device class="10" subclass="0" protocol="0" />   <!-- CDC data -->
+</resources>
