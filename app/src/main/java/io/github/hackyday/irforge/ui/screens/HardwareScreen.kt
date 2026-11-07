@@ -22,6 +22,8 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -51,20 +53,28 @@ fun HardwareScreen(app: ForgeApp, nav: NavController) {
     val settings by app.store.settings.collectAsState()
     val scope = rememberCoroutineScope()
     val ctx = LocalContext.current
+    val snackbar = remember { SnackbarHostState() }
+    var testMsg by remember { mutableStateOf<String?>(null) }
 
-    val statuses by produceState<List<TxStatus>?>(null, settings.preferredTx) {
+    androidx.compose.runtime.LaunchedEffect(testMsg) {
+        testMsg?.let { snackbar.showSnackbar(it); testMsg = null }
+    }
+
+    var refreshTick by remember { mutableStateOf(0) }
+    val statuses by produceState<List<TxStatus>?>(null, settings.preferredTx, refreshTick) {
         value = app.irEngine.statusList(null)
     }
-    val usbCandidates = app.irEngine.usb.scan()
+    val usbCandidates by produceState(app.irEngine.usb.scan(), refreshTick) {
+        value = app.irEngine.usb.scan()
+    }
 
-    var testMsg by remember { mutableStateOf<String?>(null) }
     var capturing by remember { mutableStateOf(false) }
     var captured by remember { mutableStateOf<Pair<Int, IntArray>?>(null) }
     var learnName by remember { mutableStateOf("Learned signal") }
     var showSaveLearn by remember { mutableStateOf(false) }
     var auxTestPlaying by remember { mutableStateOf(false) }
 
-    Scaffold { pad ->
+    Scaffold(snackbarHost = { SnackbarHost(snackbar) }) { pad ->
         Column(
             Modifier.padding(pad).fillMaxSize().verticalScroll(rememberScrollState()).padding(12.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -103,7 +113,12 @@ fun HardwareScreen(app: ForgeApp, nav: NavController) {
                                         if (c.kind == "unsupported") {
                                             Text("unsupported", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.labelSmall)
                                         } else if (!app.irEngine.usb.hasPermission(c)) {
-                                            OutlinedButton(onClick = { scope.launch { app.irEngine.usb.requestPermission(c) } }) { Text("Grant USB") }
+                                            OutlinedButton(onClick = {
+                                                scope.launch {
+                                                    app.irEngine.usb.requestPermission(c)
+                                                    refreshTick++
+                                                }
+                                            }) { Text("Grant USB") }
                                         } else {
                                             if (c.kind == "irtoy") {
                                                 OutlinedButton(onClick = {
@@ -139,21 +154,24 @@ fun HardwareScreen(app: ForgeApp, nav: NavController) {
                                         onCheckedChange = { v -> app.store.updateSettings { it.copy(auxChannelSwap = v) } },
                                     )
                                     Text("Swap L/R")
-                                    Spacer(Modifier.width(8.dp))
+                                }
+                                Row(verticalAlignment = Alignment.CenterVertically) {
                                     OutlinedButton(onClick = {
                                         scope.launch {
                                             auxTestPlaying = true
                                             try {
                                                 app.irEngine.aux.playTestTone(settings.auxMode == "envelope", settings.auxChannelSwap)
+                                                testMsg = "Test tone played — check your IR dongle's LED."
                                             } catch (e: Exception) {
                                                 testMsg = "Test tone failed: ${e.message}"
                                             }
                                             auxTestPlaying = false
                                         }
                                     }) { Text(if (auxTestPlaying) "…" else "Test tone") }
-                                }
-                                OutlinedButton(onClick = { app.store.updateSettings { it.copy(auxTested = true) } }) {
-                                    Text(if (settings.auxTested) "✓ Dongle confirmed working" else "Mark dongle as working")
+                                    Spacer(Modifier.width(8.dp))
+                                    OutlinedButton(onClick = { app.store.updateSettings { it.copy(auxTested = true) } }) {
+                                        Text(if (settings.auxTested) "✓ Dongle confirmed" else "Mark dongle as working")
+                                    }
                                 }
                             }
                         else -> Unit
@@ -172,15 +190,17 @@ fun HardwareScreen(app: ForgeApp, nav: NavController) {
                     )
                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         listOf("" to "Auto", "builtin" to "Built-in", "usb" to "USB", "aux" to "AUX").forEach { (k, label) ->
-                            OutlinedButton(onClick = { app.store.updateSettings { it.copy(preferredTx = k) } }) {
-                                Text(if (settings.preferredTx == k) "● $label" else label)
+                            OutlinedButton(
+                                onClick = { app.store.updateSettings { it.copy(preferredTx = k) } },
+                                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 10.dp),
+                            ) {
+                                Text(if (settings.preferredTx == k) "● $label" else label, maxLines = 1)
                             }
                         }
                     }
                 }
             }
 
-            testMsg?.let { Text(it, color = MaterialTheme.colorScheme.secondary) }
         }
     }
 

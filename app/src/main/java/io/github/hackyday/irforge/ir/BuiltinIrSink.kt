@@ -18,13 +18,21 @@ class BuiltinIrSink(private val ctx: Context) : IrSink {
     override suspend fun detail(): String {
         val m = cim ?: return "ConsumerIrManager unavailable on this device"
         if (!m.hasIrEmitter()) return "No built-in IR emitter"
-        val ranges = m.carrierFrequencies
-            .joinToString(", ") { "${it.minFrequency / 1000}–${it.maxFrequency / 1000} kHz" }
-        return "IR emitter present · carriers: ${ranges.ifEmpty { "unknown" }}"
+        // Some OEM builds throw SecurityException here even with the manifest permission — never crash.
+        val ranges = runCatching { m.carrierFrequencies.toList() }.getOrDefault(emptyList())
+        if (ranges.isEmpty()) return "IR emitter present"
+        return "IR emitter present · carriers: " + ranges.joinToString(", ") {
+            "${it.minFrequency / 1000}–${it.maxFrequency / 1000} kHz"
+        }
     }
 
     override suspend fun transmit(freqHz: Int, pattern: IntArray) = withContext(Dispatchers.IO) {
         val m = cim ?: throw IllegalStateException("No IR emitter")
-        m.transmit(freqHz, pattern)
+        try {
+            m.transmit(freqHz, pattern)
+        } catch (e: Exception) {
+            throw IllegalStateException("Built-in IR transmit failed: ${e.message ?: e.javaClass.simpleName}", e)
+        }
+        Unit
     }
 }

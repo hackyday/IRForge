@@ -81,6 +81,13 @@ class UsbIrSink(private val ctx: Context) : IrSink {
     private fun vid(d: UsbDevice) = d.vendorId
     private fun pid(d: UsbDevice) = d.productId
 
+    /** 3-arg registerReceiver(flags) needs API 26; ContextCompat handles 24+. */
+    private fun Context.registerReceiverCompat(receiver: BroadcastReceiver, filter: IntentFilter) {
+        androidx.core.content.ContextCompat.registerReceiver(
+            this, receiver, filter, androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED,
+        )
+    }
+
     // ---------------- permission ----------------
 
     fun hasPermission(c: Candidate) = usbManager.hasPermission(c.device)
@@ -96,7 +103,7 @@ class UsbIrSink(private val ctx: Context) : IrSink {
                 }
             }
         }
-        ctx.registerReceiver(receiver, IntentFilter(action), Context.RECEIVER_NOT_EXPORTED)
+        ctx.registerReceiverCompat(receiver, IntentFilter(action))
         return try {
             val pi = PendingIntent.getBroadcast(
                 ctx, 0, Intent(action).setPackage(ctx.packageName),

@@ -245,6 +245,7 @@ fun EditorScreen(app: ForgeApp, nav: NavController, rid: String) {
                 app.store.removeButton(rid, page.id, selected.id)
                 selectedId = null
             },
+            onDismiss = { selectedId = null },
         )
     }
 
@@ -268,10 +269,11 @@ private fun ButtonPropsSheet(
     button: RButton,
     hasCodes: Boolean,
     onDelete: () -> Unit,
+    onDismiss: () -> Unit,
 ) {
     var pickAction by remember { mutableStateOf(false) }
     var pickForLongPress by remember { mutableStateOf(false) }
-    ModalBottomSheet(onDismissRequest = {}) {
+    ModalBottomSheet(onDismissRequest = onDismiss) {
         Column(Modifier.padding(horizontal = 16.dp).verticalScroll(rememberScrollState())) {
             Text("Button properties", style = MaterialTheme.typography.titleMedium)
             Spacer(Modifier.height(8.dp))

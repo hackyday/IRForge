@@ -57,16 +57,58 @@ class IrEngine(private val ctx: Context, private val store: Store) {
 
     suspend fun transmit(freqHz: Int, patternUs: IntArray, repeats: Int = 1, remoteId: String? = null): String? {
         val freq = store.settings.value.carrierOverrideHz.takeIf { it > 0 } ?: freqHz
+        val pattern = sanitize(patternUs.toList())
         val sink = pickSink(remoteId) ?: return "No IR transmitter found"
         repeat(maxOf(1, repeats)) { n ->
-            sink.transmit(freq, patternUs)
+            try {
+                if (sink is AuxIrSink) {
+                    val s = store.settings.value
+                    sink.play(freq, pattern, s.auxMode == "envelope", s.auxChannelSwap)
+                } else {
+                    sink.transmit(freq, pattern)
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                return "Transmit failed via ${sink.label}: ${e.message ?: e.javaClass.simpleName}"
+            }
             if (n < repeats) delay(45)
         }
         return null
     }
 
     suspend fun sendCode(code: Code, repeats: Int = 1, remoteId: String? = null): String? =
-        transmit(code.freqHz, code.pattern.toIntArray(), repeats, remoteId)
+        transmit(
+            code.freqHz, code.pattern.toIntArray(),
+            repeats = maxOf(repeats, store.settings.value.defaultRepeats),
+            remoteId = remoteId,
+        )
+
+    /**
+     * Widget/broadcast path: only uses sinks that are ready RIGHT NOW (no USB
+     * permission prompts — broadcast receivers must finish within ~10 s).
+     */
+    suspend fun sendCodeReadyNow(code: Code): String? {
+        val freq = store.settings.value.carrierOverrideHz.takeIf { it > 0 } ?: code.freqHz
+        val pattern = sanitize(code.pattern)
+        return try {
+            val usbReady = usb.scan().firstOrNull { it.kind != "unsupported" && usb.hasPermission(it) }
+            when {
+                builtin.available() -> builtin.transmit(freq, pattern)
+                usbReady != null -> usb.transmitWith(usbReady, freq, pattern)
+                aux.available() -> {
+                    val s = store.settings.value
+                    aux.play(freq, pattern, s.auxMode == "envelope", s.auxChannelSwap)
+                }
+                else -> return "No IR transmitter ready — open IRForge"
+            }
+            null
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            "Transmit failed: ${e.message ?: e.javaClass.simpleName}"
+        }
+    }
 
     /** Runs a macro; onProgress(stepIndex, total). Returns error or null. */
     suspend fun runMacro(

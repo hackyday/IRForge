@@ -18,6 +18,7 @@ data class Slot(
     val textColor: String = "#FFFFFF",
     val fontSize: Float = 34f,
     val shape: ButtonShape = ButtonShape.ROUNDED,
+    val holdRepeat: Boolean = false,
 )
 
 data class Template(
@@ -39,14 +40,14 @@ private fun dpad(cx: Float, cy: Float, w: Float = 200f, h: Float = 140f, gap: Fl
 )
 
 private fun volRow(x: Float, y: Float) = listOf(
-    Slot("vol_up", "Vol +", "🔊", x, y, 220f, 140f, "#2B2E3A"),
-    Slot("vol_down", "Vol -", "🔉", x, y + 160f, 220f, 140f, "#2B2E3A"),
+    Slot("vol_up", "Vol +", "🔊", x, y, 220f, 140f, "#2B2E3A", holdRepeat = true),
+    Slot("vol_down", "Vol -", "🔉", x, y + 160f, 220f, 140f, "#2B2E3A", holdRepeat = true),
     Slot("mute", "Mute", "🔇", x + 240f, y + 80f, 220f, 140f, "#2B2E3A"),
 )
 
 private fun chRow(x: Float, y: Float) = listOf(
-    Slot("ch_up", "Ch +", "⏶", x, y, 220f, 140f, "#2B2E3A"),
-    Slot("ch_down", "Ch -", "⏷", x, y + 160f, 220f, 140f, "#2B2E3A"),
+    Slot("ch_up", "Ch +", "⏶", x, y, 220f, 140f, "#2B2E3A", holdRepeat = true),
+    Slot("ch_down", "Ch -", "⏷", x, y + 160f, 220f, 140f, "#2B2E3A", holdRepeat = true),
 )
 
 private val RED = "#C62828"
@@ -156,6 +157,7 @@ fun slotToButton(slot: Slot): RButton = RButton(
     textColor = slot.textColor,
     fontSize = slot.fontSize,
     shape = slot.shape,
+    holdRepeat = slot.holdRepeat,
 )
 
 fun buildFromTemplate(template: Template, name: String): Remote = Remote(

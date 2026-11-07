@@ -56,10 +56,12 @@ fun SettingsScreen(app: ForgeApp, nav: NavController) {
     val exportDoc = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
         if (uri != null) {
             scope.launch {
-                withContext(Dispatchers.IO) {
-                    ctx.contentResolver.openOutputStream(uri)?.use { it.write(app.store.exportAll().toByteArray()) }
+                val ok = withContext(Dispatchers.IO) {
+                    runCatching {
+                        ctx.contentResolver.openOutputStream(uri)?.use { it.write(app.store.exportAll().toByteArray()) } != null
+                    }.getOrDefault(false)
                 }
-                snackbar.showSnackbar("Backup saved")
+                snackbar.showSnackbar(if (ok) "Backup saved" else "Backup failed")
             }
         }
     }
@@ -67,9 +69,10 @@ fun SettingsScreen(app: ForgeApp, nav: NavController) {
         if (uri != null) {
             scope.launch {
                 val text = withContext(Dispatchers.IO) {
-                    ctx.contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }
+                    runCatching { ctx.contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() } }.getOrNull()
                 }
                 val ok = text != null && app.store.restoreAll(text)
+                if (ok) io.github.hackyday.irforge.widget.RemoteWidgetProvider.updateAll(ctx)
                 snackbar.showSnackbar(if (ok) "Backup restored" else "Invalid backup file")
             }
         }
@@ -146,7 +149,7 @@ fun SettingsScreen(app: ForgeApp, nav: NavController) {
             Card(shape = RoundedCornerShape(16.dp)) {
                 Column(Modifier.padding(14.dp)) {
                     Text("About", style = MaterialTheme.typography.titleSmall)
-                    Text("IRForge v1.0.0", style = MaterialTheme.typography.bodyMedium)
+                    Text("IRForge v${io.github.hackyday.irforge.BuildConfig.VERSION_NAME}", style = MaterialTheme.typography.bodyMedium)
                     Text(
                         "Universal IR remote · built-in / USB / AUX blasters · Flipper .ir import · github.com/hackyday/IRForge",
                         style = MaterialTheme.typography.bodySmall,

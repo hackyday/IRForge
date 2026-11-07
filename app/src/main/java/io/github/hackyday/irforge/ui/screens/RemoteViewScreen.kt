@@ -93,7 +93,10 @@ fun RemoteViewScreen(app: ForgeApp, nav: NavController, rid: String) {
     }
 
     suspend fun sendAction(action: Action?) {
-        val a = action ?: return
+        val a = action ?: run {
+            errDialog = "No action assigned to this button yet.\n\nTap the pencil (edit) above, select the button, then \"Assign\" a code or macro."
+            return
+        }
         when (a.type) {
             "code" -> app.store.codeById(a.id)?.let { code ->
                 val err = app.irEngine.sendCode(code, repeats = a.repeat.coerceAtLeast(1), remoteId = rid)
@@ -160,8 +163,8 @@ fun RemoteViewScreen(app: ForgeApp, nav: NavController, rid: String) {
                             remote = r,
                             scale = scale,
                             settings = settings,
-                            onSend = { action -> scope.launch { sendAction(action) } },
-                            onPressStart = { PressFeedback.haptic(ctx, settings) },
+                            onSend = { action -> sendAction(action) },
+                            onPressStart = { if (b.haptic) PressFeedback.haptic(ctx, settings) },
                         )
                     }
                 }
@@ -215,12 +218,13 @@ private fun RemotePlayButton(
     remote: io.github.hackyday.irforge.data.Remote,
     scale: Float,
     settings: io.github.hackyday.irforge.data.Settings,
-    onSend: (Action?) -> Unit,
+    onSend: suspend (Action?) -> Unit,
     onPressStart: () -> Unit,
 ) {
     val interaction = remember(button.id) { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
     val density = LocalDensity.current
+    val scope = rememberCoroutineScope()
     val wDp = with(density) { (button.w * scale).toDp() }
     val hDp = with(density) { (button.h * scale).toDp() }
 
@@ -230,9 +234,9 @@ private fun RemotePlayButton(
         Modifier.pointerInput(button.id, button.action?.id, button.longPress?.id) {
             detectTapGestures(
                 onLongPress = {
-                    if (button.longPress != null) { onPressStart(); onSend(button.longPress) }
+                    if (button.longPress != null) { onPressStart(); scope.launch { onSend(button.longPress) } }
                 },
-                onTap = { onPressStart(); onSend(button.action) },
+                onTap = { onPressStart(); scope.launch { onSend(button.action) } },
             )
         }
     }

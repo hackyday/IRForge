@@ -121,14 +121,12 @@ class AuxIrSink(private val ctx: Context) : IrSink {
         try {
             if (track.state != AudioTrack.STATE_INITIALIZED) throw UnsupportedOperationException("sample rate $sr unsupported")
             track.write(pcm, 0, pcm.size)
+            // MODE_STATIC loops by default — play exactly once, then stop.
+            track.setLoopPoints(0, n, 0)
             track.play()
-            // MODE_STATIC loops until stopped; stop when playback head reaches the end.
-            val playMs = (totalUs / 1000).toLong() + 120
-            val start = System.currentTimeMillis()
-            while (track.playbackHeadPosition < n && System.currentTimeMillis() - start < playMs + 2000) {
-                Thread.sleep(10)
-            }
+            Thread.sleep(totalUs / 1000L + 40L)
         } finally {
+            runCatching { track.pause() }
             runCatching { track.stop() }
             runCatching { track.release() }
         }

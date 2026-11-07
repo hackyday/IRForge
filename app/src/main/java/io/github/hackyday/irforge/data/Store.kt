@@ -16,10 +16,13 @@ class Store(private val ctx: Context) {
     private val json = Json { ignoreUnknownKeys = true; prettyPrint = true; encodeDefaults = true }
     private val dir: File get() = ctx.filesDir.apply { mkdirs() }
 
+    // Single background writer: serializes every disk write off the main thread.
+    private val writeExecutor = java.util.concurrent.Executors.newSingleThreadExecutor()
+
     private val _codes = MutableStateFlow(loadList<Code>("codes.json"))
     val codes = _codes.asStateFlow()
 
-    private val _remotes = MutableStateFlow(loadList<Remote>("remotes.json"))
+    private val _remotes = MutableStateFlow(sanitizeRemotes(loadList<Remote>("remotes.json")))
     val remotes = _remotes.asStateFlow()
 
     private val _macros = MutableStateFlow(loadList<Macro>("macros.json"))
@@ -36,30 +39,73 @@ class Store(private val ctx: Context) {
 
     private inline fun <reified R> loadList(name: String): MutableList<R> =
         runCatching { json.decodeFromString<List<R>>(File(dir, name).takeIf { it.exists() }?.readText() ?: "[]") }
-            .getOrDefault(emptyList()).toMutableList()
+            .getOrElse {
+                // Corrupt file: back it up for the user instead of silently wiping it.
+                val f = File(dir, name)
+                if (f.exists()) runCatching { f.renameTo(File(dir, "$name.corrupt-${System.currentTimeMillis()}")) }
+                emptyList()
+            }
+            .toMutableList()
+
+    /** Sanity-clamp button geometry on load so no drag accident can strand a button off-screen. */
+    private fun sanitizeRemotes(list: List<Remote>): List<Remote> = list.map { r ->
+        r.copy(pages = r.pages.map { p ->
+            p.copy(buttons = p.buttons.map { b ->
+                b.copy(
+                    x = b.x.coerceIn(0f, 1040f),
+                    y = b.y.coerceIn(0f, 5000f),
+                    w = b.w.coerceIn(50f, 1060f),
+                    h = b.h.coerceIn(40f, 900f),
+                    opacity = b.opacity.coerceIn(0.05f, 1f),
+                    fontSize = b.fontSize.coerceIn(12f, 90f),
+                )
+            })
+        })
+    }
 
     private fun writeAtomic(file: File, text: String) {
-        val tmp = File(file.parentFile, file.name + ".tmp")
+        val tmp = File(file.parentFile, "${file.name}.${System.nanoTime()}.tmp")
         tmp.writeText(text)
-        tmp.renameTo(file)
+        if (!tmp.renameTo(file)) {
+            tmp.copyTo(file, overwrite = true)
+            tmp.delete()
+        }
+    }
+
+    private fun saveAsync(name: String, content: () -> String) {
+        writeExecutor.execute {
+            runCatching { writeAtomic(File(dir, name), content()) }
+        }
     }
 
     fun newId(): String = UUID.randomUUID().toString().take(12)
 
-    fun saveCodes() = writeAtomic(File(dir, "codes.json"), json.encodeToString(_codes.value))
-    fun saveRemotes() = writeAtomic(File(dir, "remotes.json"), json.encodeToString(_remotes.value))
-    fun saveMacros() = writeAtomic(File(dir, "macros.json"), json.encodeToString(_macros.value))
-    fun saveSettings() = writeAtomic(File(dir, "settings.json"), json.encodeToString(_settings.value))
-    fun saveWidgetPrefs() = writeAtomic(File(dir, "widgets.json"), json.encodeToString(_widgetPrefs.value))
+    fun saveCodes() = saveAsync("codes.json") { json.encodeToString(_codes.value) }
+    fun saveRemotes() = saveAsync("remotes.json") { json.encodeToString(_remotes.value) }
+    fun saveMacros() = saveAsync("macros.json") { json.encodeToString(_macros.value) }
+    fun saveSettings() = saveAsync("settings.json") { json.encodeToString(_settings.value) }
+    fun saveWidgetPrefs() = saveAsync("widgets.json") { json.encodeToString(_widgetPrefs.value) }
+
+    private fun notifyWidgets() = runCatching {
+        io.github.hackyday.irforge.widget.RemoteWidgetProvider.updateAll(ctx)
+    }
 
     // ---- codes ----
     fun upsertCode(code: Code) {
         val list = _codes.value.toMutableList()
         val i = list.indexOfFirst { it.id == code.id }
         if (i >= 0) list[i] = code else list.add(code)
-        _codes.value = list; saveCodes()
+        _codes.value = list; saveCodes(); notifyWidgets()
     }
-    fun deleteCode(id: String) { _codes.value = _codes.value.filterNot { it.id == id }.toMutableList(); saveCodes() }
+
+    /** Batch insert (imports): one save + one widget refresh for the whole list. */
+    fun addCodes(list: List<Code>) {
+        if (list.isEmpty()) return
+        _codes.value = (_codes.value + list).toMutableList()
+        saveCodes(); notifyWidgets()
+    }
+
+    fun deleteCode(id: String) { _codes.value = _codes.value.filterNot { it.id == id }.toMutableList(); saveCodes(); notifyWidgets() }
     fun codeById(id: String): Code? = _codes.value.firstOrNull { it.id == id }
     fun codeByPattern(p: List<Int>): Code? = _codes.value.firstOrNull { it.pattern == p }
 
@@ -68,9 +114,9 @@ class Store(private val ctx: Context) {
         val list = _remotes.value.toMutableList()
         val i = list.indexOfFirst { it.id == remote.id }
         if (i >= 0) list[i] = remote else list.add(remote)
-        _remotes.value = list; saveRemotes()
+        _remotes.value = list; saveRemotes(); notifyWidgets()
     }
-    fun deleteRemote(id: String) { _remotes.value = _remotes.value.filterNot { it.id == id }.toMutableList(); saveRemotes() }
+    fun deleteRemote(id: String) { _remotes.value = _remotes.value.filterNot { it.id == id }.toMutableList(); saveRemotes(); notifyWidgets() }
     fun remoteById(id: String): Remote? = _remotes.value.firstOrNull { it.id == id }
 
     fun updateRemote(id: String, transform: (Remote) -> Remote) {
@@ -109,20 +155,25 @@ class Store(private val ctx: Context) {
     fun deleteWidgetCfg(appWidgetId: Int) { _widgetPrefs.value = _widgetPrefs.value.filterNot { it.appWidgetId == appWidgetId }.toMutableList(); saveWidgetPrefs() }
 
     // ---- backup/restore ----
-    fun exportAll(): String {
-        @Serializable data class Backup(val codes: List<Code>, val remotes: List<Remote>, val macros: List<Macro>, val settings: Settings)
-        return json.encodeToString(Backup(_codes.value, _remotes.value, _macros.value, _settings.value))
-    }
+    @Serializable
+    private data class Backup(
+        val codes: List<Code> = emptyList(),
+        val remotes: List<Remote> = emptyList(),
+        val macros: List<Macro> = emptyList(),
+        val settings: Settings = Settings(),
+        val widgets: List<WidgetPrefsEntry> = emptyList(),
+    )
 
-    fun restoreAll(text: String): Boolean {
-        @Serializable data class Backup(val codes: List<Code> = emptyList(), val remotes: List<Remote> = emptyList(), val macros: List<Macro> = emptyList(), val settings: Settings = Settings())
-        return runCatching {
-            val b = json.decodeFromString<Backup>(text)
-            _codes.value = b.codes.toMutableList(); saveCodes()
-            _remotes.value = b.remotes.toMutableList(); saveRemotes()
-            _macros.value = b.macros.toMutableList(); saveMacros()
-            _settings.value = b.settings; saveSettings()
-            true
-        }.getOrDefault(false)
-    }
+    fun exportAll(): String =
+        json.encodeToString(Backup(_codes.value, _remotes.value, _macros.value, _settings.value, _widgetPrefs.value))
+
+    fun restoreAll(text: String): Boolean = runCatching {
+        val b = json.decodeFromString<Backup>(text)
+        _codes.value = b.codes.toMutableList(); saveCodes()
+        _remotes.value = b.remotes.toMutableList(); saveRemotes()
+        _macros.value = b.macros.toMutableList(); saveMacros()
+        _settings.value = b.settings; saveSettings()
+        _widgetPrefs.value = b.widgets.toMutableList(); saveWidgetPrefs()
+        true
+    }.getOrDefault(false)
 }

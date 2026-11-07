@@ -41,7 +41,8 @@ class RemoteWidgetProvider : AppWidgetProvider() {
         (context.applicationContext as? android.app.Application)?.let { application ->
             kotlinx.coroutines.CoroutineScope(Dispatchers.IO + kotlinx.coroutines.NonCancellable).launch {
                 try {
-                    val err = app.irEngine.sendCode(code, remoteId = cfg.remoteId.ifEmpty { null })
+                    // Ready-sinks only: a widget press must never sit waiting for a permission dialog.
+                    val err = app.irEngine.sendCodeReadyNow(code)
                     if (err != null) Toast.makeText(context, err, Toast.LENGTH_SHORT).show()
                     else vibrate(context)
                 } catch (e: Exception) {

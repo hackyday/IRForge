@@ -172,7 +172,10 @@ object Importers {
             val freq = tok[1].trim().toIntOrNull() ?: continue
             val pat = tok.drop(2).joinToString(" ").trim().split(Regex("[\\s]+"))
                 .mapNotNull { it.toFloatOrNull()?.toInt() }
-            if (pat.size >= 2) out.add(ImportedCode(name, freq, 0.33f, pat, "csv"))
+            // Guard against junk rows from arbitrary CSVs (freq range re-checked by parse()).
+            if (pat.size >= 2 && pat.all { it in 1..2_000_000 }) {
+                out.add(ImportedCode(name, freq, 0.33f, pat, "csv"))
+            }
         }
         return out
     }

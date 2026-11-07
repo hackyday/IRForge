@@ -72,15 +72,23 @@ fun LibraryScreen(app: ForgeApp, nav: NavController) {
                 actions = {
                     IconButton(onClick = {
                         scope.launch {
-                            val dir = File(ctx.cacheDir, "exports").apply { mkdirs() }
-                            val f = File(dir, "irforge_library.ir")
-                            f.writeText(Importers.exportFlipper(codes.map { Triple(it.name, it.freqHz, it.pattern) }))
-                            val uri = FileProvider.getUriForFile(ctx, ctx.packageName + ".files", f)
-                            ctx.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).apply {
-                                type = "application/octet-stream"
-                                putExtra(Intent.EXTRA_STREAM, uri)
-                                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                            }, "Export .ir"))
+                            val uri = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                                runCatching {
+                                    val dir = File(ctx.cacheDir, "exports").apply { mkdirs() }
+                                    val f = File(dir, "irforge_library.ir")
+                                    f.writeText(Importers.exportFlipper(codes.map { Triple(it.name, it.freqHz, it.pattern) }))
+                                    FileProvider.getUriForFile(ctx, ctx.packageName + ".files", f)
+                                }.getOrNull()
+                            }
+                            if (uri == null) {
+                                snackbar.showSnackbar("Export failed")
+                            } else {
+                                ctx.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).apply {
+                                    type = "application/octet-stream"
+                                    putExtra(Intent.EXTRA_STREAM, uri)
+                                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                }, "Export .ir"))
+                            }
                         }
                     }) { Icon(Icons.Filled.Share, "Export all as .ir") }
                 },

@@ -6,15 +6,12 @@ import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.getValue
 import io.github.hackyday.irforge.data.Code
 import io.github.hackyday.irforge.data.newId
 import io.github.hackyday.irforge.importer.Importers
 import io.github.hackyday.irforge.ui.AppNav
 import io.github.hackyday.irforge.ui.ForgeTheme
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.MainScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -39,27 +36,32 @@ class MainActivity : ComponentActivity() {
         if (intent?.action != Intent.ACTION_VIEW) return
         val uri: Uri = intent.data ?: return
         val app = application as ForgeApp
-        MainScope().launch {
+        app.appScope.launch {
             val text = withContext(Dispatchers.IO) {
                 runCatching { contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() } }.getOrNull()
-            } ?: run { Toast.makeText(this@MainActivity, "Could not read file", Toast.LENGTH_SHORT).show(); return@launch }
+            } ?: run {
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(this@MainActivity, "Could not read file", Toast.LENGTH_SHORT).show()
+                }
+                return@launch
+            }
             val parsed = withContext(Dispatchers.IO) { Importers.parse(uri.lastPathSegment ?: "signal.ir", text) }
-            val existing = app.store.codes.value
-            val fresh = parsed.filter { c -> existing.none { it.pattern == c.pattern } }
-            fresh.forEach { c ->
-                app.store.upsertCode(
+            val fresh = parsed.filter { c -> app.store.codes.value.none { it.pattern == c.pattern } }
+                .map { c ->
                     Code(
                         id = newId(), name = c.name, freqHz = c.freqHz, dutyCycle = c.dutyCycle,
                         pattern = c.pattern, source = "import", sourceFormat = c.sourceFormat,
                         protocol = c.protocol, createdAt = System.currentTimeMillis(),
-                    ),
-                )
+                    )
+                }
+            app.store.addCodes(fresh)
+            withContext(Dispatchers.Main) {
+                Toast.makeText(
+                    this@MainActivity,
+                    "Imported ${fresh.size} signal(s) (${parsed.size - fresh.size} already present)",
+                    Toast.LENGTH_LONG,
+                ).show()
             }
-            Toast.makeText(
-                this@MainActivity,
-                "Imported ${fresh.size} signal(s) (${parsed.size - fresh.size} already present)",
-                Toast.LENGTH_LONG,
-            ).show()
         }
     }
 }
