@@ -47,11 +47,15 @@ class Store(private val ctx: Context) {
             }
             .toMutableList()
 
+    /** Glyphs missing from Android fonts (render as tofu) — remap on load. */
+    private val ICON_REMAP = mapOf("⏻" to "🔌", "⏶" to "▲", "⏷" to "▼", "🅼" to "🔄")
+
     /** Sanity-clamp button geometry on load so no drag accident can strand a button off-screen. */
     private fun sanitizeRemotes(list: List<Remote>): List<Remote> = list.map { r ->
         r.copy(pages = r.pages.map { p ->
             p.copy(buttons = p.buttons.map { b ->
                 b.copy(
+                    icon = ICON_REMAP[b.icon] ?: b.icon,
                     x = b.x.coerceIn(0f, 1040f),
                     y = b.y.coerceIn(0f, 5000f),
                     w = b.w.coerceIn(50f, 1060f),

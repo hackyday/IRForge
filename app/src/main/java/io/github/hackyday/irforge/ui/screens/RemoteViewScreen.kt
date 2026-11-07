@@ -47,6 +47,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
@@ -60,6 +61,7 @@ import io.github.hackyday.irforge.data.RButton
 import io.github.hackyday.irforge.ui.components.PressFeedback
 import io.github.hackyday.irforge.ui.components.RemoteButtonView
 import io.github.hackyday.irforge.ui.components.parseColor
+import io.github.hackyday.irforge.ui.components.shapeOf
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -222,7 +224,15 @@ private fun RemotePlayButton(
     onPressStart: () -> Unit,
 ) {
     val interaction = remember(button.id) { MutableInteractionSource() }
-    val pressed by interaction.collectIsPressedAsState()
+    val holdPressed by interaction.collectIsPressedAsState()
+    var tapPressed by remember(button.id) { mutableStateOf(false) }
+    // Visible press feedback: shrink + white glow on every press path (tap, long-press, hold).
+    val pressed = if (button.holdRepeat) holdPressed else tapPressed
+    val pressScale by androidx.compose.animation.core.animateFloatAsState(
+        targetValue = if (pressed) 0.92f else 1f,
+        animationSpec = androidx.compose.animation.core.spring(stiffness = 700f),
+        label = "pressScale",
+    )
     val density = LocalDensity.current
     val scope = rememberCoroutineScope()
     val wDp = with(density) { (button.w * scale).toDp() }
@@ -233,6 +243,10 @@ private fun RemotePlayButton(
     } else {
         Modifier.pointerInput(button.id, button.action?.id, button.longPress?.id) {
             detectTapGestures(
+                onPress = {
+                    tapPressed = true
+                    try { awaitRelease() } finally { tapPressed = false }
+                },
                 onLongPress = {
                     if (button.longPress != null) { onPressStart(); scope.launch { onSend(button.longPress) } }
                 },
@@ -245,7 +259,11 @@ private fun RemotePlayButton(
         Modifier
             .offset { androidx.compose.ui.unit.IntOffset((button.x * scale).toInt(), (button.y * scale).toInt()) }
             .size(width = wDp, height = hDp)
-            .graphicsLayer { alpha = button.opacity.coerceIn(0.05f, 1f) }
+            .graphicsLayer {
+                scaleX = pressScale
+                scaleY = pressScale
+                alpha = button.opacity.coerceIn(0.05f, 1f)
+            }
             .then(gestureModifier),
     ) {
         RemoteButtonView(
@@ -254,6 +272,13 @@ private fun RemotePlayButton(
             fontSizePx = button.fontSize * scale,
             modifier = Modifier.fillMaxSize(),
         )
+        if (pressed) {
+            Box(
+                Modifier
+                    .matchParentSize()
+                    .background(Color.White.copy(alpha = 0.22f), shapeOf(button.shape)),
+            )
+        }
     }
 
     if (button.holdRepeat && button.action != null) {

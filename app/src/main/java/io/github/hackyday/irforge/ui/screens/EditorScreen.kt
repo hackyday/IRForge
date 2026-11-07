@@ -74,7 +74,7 @@ import io.github.hackyday.irforge.ui.components.RemoteButtonView
 import io.github.hackyday.irforge.ui.components.parseColor
 import io.github.hackyday.irforge.ui.components.shapeOf
 
-private val QUICK_EMOJI = listOf("⏻", "🔊", "🔉", "🔇", "▲", "▼", "◀", "▶", "OK", "⏯", "⏮", "⏭", "🏠", "↩", "☰", "ℹ", "⏱", "❄", "⚡", "💡")
+private val QUICK_EMOJI = listOf("🔌", "🔊", "🔉", "🔇", "▲", "▼", "◀", "▶", "OK", "⏯", "⏮", "⏭", "🏠", "↩", "☰", "ℹ", "⏱", "❄", "⚡", "💡")
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -311,7 +311,14 @@ private fun ButtonPropsSheet(
                         colors = androidx.compose.material3.ButtonDefaults.buttonColors(
                             containerColor = if (button.shape == s) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant,
                         ),
-                    ) { Text(s.name.lowercase().replaceFirstChar { it.uppercase() }) }
+                        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp),
+                    ) {
+                        Text(
+                            s.name.lowercase().replaceFirstChar { it.uppercase() },
+                            maxLines = 1,
+                            style = MaterialTheme.typography.labelSmall,
+                        )
+                    }
                 }
             }
             Spacer(Modifier.height(8.dp))
@@ -370,6 +377,11 @@ private fun ButtonPropsSheet(
             }
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(actionDesc, Modifier.weight(1f))
+                if (button.action != null) {
+                    TextButton(onClick = {
+                        app.store.updateButton(rid, pageId, button.id) { it.copy(action = null) }
+                    }) { Text("None") }
+                }
                 Button(onClick = { pickAction = true }, enabled = hasCodes) { Text("Assign") }
             }
             Text("Repeats: ${button.action?.repeat ?: 1}", style = MaterialTheme.typography.labelMedium)
@@ -394,6 +406,11 @@ private fun ButtonPropsSheet(
                     },
                     Modifier.weight(1f),
                 )
+                if (button.longPress != null) {
+                    TextButton(onClick = {
+                        app.store.updateButton(rid, pageId, button.id) { it.copy(longPress = null) }
+                    }) { Text("None") }
+                }
                 Button(onClick = { pickAction = true; pickForLongPress = true }) { Text("Assign") }
             }
             Spacer(Modifier.height(8.dp))

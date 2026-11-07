@@ -88,15 +88,19 @@ fun SettingsScreen(app: ForgeApp, nav: NavController) {
             Card(shape = RoundedCornerShape(16.dp)) {
                 Column(Modifier.padding(14.dp)) {
                     Text("Theme", style = MaterialTheme.typography.titleSmall)
+                Column {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         RadioButton(selected = settings.themeMode == "system", onClick = { app.store.updateSettings { it.copy(themeMode = "system") } })
                         Text("System")
-                        Spacer(Modifier.fillMaxWidth(0.1f))
+                        Spacer(Modifier.fillMaxWidth(0.08f))
                         RadioButton(selected = settings.themeMode == "dark", onClick = { app.store.updateSettings { it.copy(themeMode = "dark") } })
                         Text("Dark")
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
                         RadioButton(selected = settings.themeMode == "light", onClick = { app.store.updateSettings { it.copy(themeMode = "light") } })
                         Text("Light")
                     }
+                }
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Switch(checked = settings.haptics, onCheckedChange = { v -> app.store.updateSettings { it.copy(haptics = v) } })
                         Text("  Global haptic feedback")

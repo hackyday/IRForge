@@ -116,6 +116,7 @@ fun HomeScreen(app: ForgeApp, nav: NavController) {
 
     if (showNew) NewRemoteDialog(app, onDone = { id -> showNew = false; if (id != null) nav.navigate("editor/$id") })
     menuFor?.let { r ->
+        var confirmDelete by remember(r.id) { mutableStateOf(false) }
         AlertDialog(
             onDismissRequest = { menuFor = null },
             confirmButton = {},
@@ -132,12 +133,25 @@ fun HomeScreen(app: ForgeApp, nav: NavController) {
                         )
                         app.store.upsertRemote(copy)
                     }) { Text("📄 Duplicate") }
-                    TextButton(onClick = { menuFor = null; app.store.deleteRemote(r.id) }) {
+                    TextButton(onClick = { confirmDelete = true }) {
                         Text("🗑 Delete", color = Color(0xFFEF5350))
                     }
                 }
             },
         )
+        if (confirmDelete) {
+            AlertDialog(
+                onDismissRequest = { confirmDelete = false },
+                title = { Text("Delete \"${r.name}\"?") },
+                text = { Text("The remote layout will be removed. Imported codes stay in the library.") },
+                confirmButton = {
+                    TextButton(onClick = { app.store.deleteRemote(r.id); confirmDelete = false; menuFor = null }) {
+                        Text("Delete", color = Color(0xFFEF5350))
+                    }
+                },
+                dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text("Cancel") } },
+            )
+        }
     }
 }
 
