@@ -93,3 +93,14 @@ Releases are built automatically by GitHub Actions on `v*` tags — the workflow
 ## License
 
 MIT
+
+## CI (GitHub Actions)
+
+The build workflow lives at `.github/workflows/build.yml` (kept out of the initial push because
+the repo token lacked the `workflow` scope). To enable automatic APK releases on `v*` tags:
+
+```bash
+gh auth refresh -s workflow          # one-time browser login to add the scope
+git add .github && git commit -m "ci: add build workflow" && git push
+git tag v1.0.1 && git push origin v1.0.1
+```
