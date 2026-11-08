@@ -21,8 +21,8 @@ android {
         applicationId = "io.github.hackyday.irforge"
         minSdk = 24
         targetSdk = 34
-        versionCode = 8
-        versionName = "1.0.6"
+        versionCode = 10
+        versionName = "1.0.8"
         vectorDrawables { useSupportLibrary = true }
     }
 

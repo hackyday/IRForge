@@ -6,7 +6,6 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
-import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -71,9 +70,6 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
-import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
 import io.github.hackyday.irforge.ForgeApp
 import io.github.hackyday.irforge.data.Action
 import io.github.hackyday.irforge.data.ButtonShape
@@ -90,9 +86,8 @@ import io.github.hackyday.irforge.ui.components.RemoteButtonView
 import io.github.hackyday.irforge.ui.components.parseColor
 import io.github.hackyday.irforge.ui.components.shapeOf
 
-private fun starts0(m: Map<String, Pair<Float, Float>>?, id: String): Pair<Float, Float>? = m?.get(id)
-
 private val QUICK_EMOJI = listOf("🔌", "🔊", "🔉", "🔇", "▲", "▼", "◀", "▶", "OK", "⏯", "⏮", "⏭", "🏠", "↩", "☰", "ℹ", "⏱", "❄", "⚡", "💡")
+
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -112,8 +107,10 @@ fun EditorScreen(app: ForgeApp, nav: NavController, rid: String, initialSelect: 
     var dragAdj by remember { mutableStateOf<Map<String, Pair<Float, Float>>?>(null) }
     var dragStarts by remember { mutableStateOf<Map<String, Pair<Float, Float>>?>(null) }
     var dragPrimary by remember { mutableStateOf<String?>(null) }
-    var dragMoved by remember { mutableStateOf(false) }
-    var dragWasSelected by remember { mutableStateOf(false) }
+    // True while a canvas drag is engaged: disables the ancestor verticalScroll so it
+    // can never fight the drag for the pointer stream (set at ENGAGE, cleared on
+    // commit/cancel and defensively at the start of every new gesture).
+    var canvasDragging by remember { mutableStateOf(false) }
     var resizeAdj by remember { mutableStateOf<Pair<String, Pair<Float, Float>>?>(null) }
     var gridSnap by remember { mutableStateOf(true) }
     var canvasW by remember { mutableStateOf(1080) }
@@ -210,10 +207,14 @@ fun EditorScreen(app: ForgeApp, nav: NavController, rid: String, initialSelect: 
                 val density = LocalDensity.current
                 var guideV by remember { mutableStateOf<Float?>(null) }
                 var guideH by remember { mutableStateOf<Float?>(null) }
+                val canvasScroll = rememberScrollState()
                 Column(
                     Modifier
                         .fillMaxSize()
-                        .verticalScroll(rememberScrollState())
+                        // Scroll is disabled while a canvas drag is engaged: the detector consumes
+                        // post-slop changes anyway, but disabling removes any chance of the parent
+                        // scrollable interfering with the pointer stream mid-drag.
+                        .verticalScroll(canvasScroll, enabled = !canvasDragging)
                         .background(Brush.verticalGradient(listOf(parseColor(r.bgStart), parseColor(r.bgEnd, parseColor(r.bgStart)))))
                         .onSizeChanged { canvasW = it.width },
                 ) {
@@ -262,13 +263,130 @@ fun EditorScreen(app: ForgeApp, nav: NavController, rid: String, initialSelect: 
 
                     // Canvas surface: ALL gestures live here (one detector, hit-tested),
                     // so per-button recompositions can never kill an active drag.
-                    // TAP detector declared first; the DRAG detector below is innermost
-                    // and therefore wins the touch-slop race.
+                    // NO long-press, NO timeouts, NO coroutine builders in here: they
+                    // cancelled the gesture mid-drag. The properties sheet is opened by
+                    // the ✏️ chip that appears next to the selected button instead.
                     Box(
                         Modifier
                             .fillMaxWidth()
                             .height(with(density) { canvasH.toDp() })
-
+                            .pointerInput(page.id, gridSnap, multiMode) {
+                                awaitEachGesture {
+                                    // Stale-state reset: if a previous gesture was cancelled
+                                    // (pointerInput restart, pointer cancel), its commit/reset never
+                                    // ran. Clear before every gesture so leftover dragAdj/dragStarts
+                                    // can never poison this one.
+                                    dragAdj = null
+                                    dragStarts = null
+                                    dragPrimary = null
+                                    guideV = null
+                                    guideH = null
+                                    canvasDragging = false
+                                    val down = awaitFirstDown(requireUnconsumed = true)
+                                    val downPos = down.position
+                                    var moved = false          // drag mode engaged
+                                    var totalDist = 0f         // cumulative pre-slop distance
+                                    var tapCandidate = true
+                                    var finalUpdate = false    // UP arrived while dragging: apply final position, then stop
+                                    // Resize-handle exclusion: when the single-selected button's
+                                    // resize handle is under the finger, that handle's own
+                                    // detectDragGestures owns the gesture — the canvas detector
+                                    // must not ALSO drag the button (double gesture: move + resize).
+                                    val selBtnAtDown = selectedIds.singleOrNull()?.let { sid -> currentButtons.firstOrNull { it.id == sid } }
+                                    val onResizeHandle = selBtnAtDown?.let { sb ->
+                                        val ddx = downPos.x / currentScale - (sb.x + sb.w)
+                                        val ddy = downPos.y / currentScale - (sb.y + sb.h)
+                                        ddx * ddx + ddy * ddy <= 40f * 40f
+                                    } ?: false
+                                    val hit = if (onResizeHandle) null else hitTest(downPos.x / currentScale, downPos.y / currentScale)
+                                    while (true) {
+                                        val event = awaitPointerEvent()
+                                        val c = event.changes.firstOrNull { it.id == down.id } ?: break
+                                        val pc = c.positionChangeIgnoreConsumed()
+                                        if (c.changedToUpIgnoreConsumed()) {
+                                            if (!moved) {
+                                                if (tapCandidate) {
+                                                    // 1) Tap on the ✏️ chip of the single-selected button →
+                                                    //    open its properties. The chip is visual-only now:
+                                                    //    the canvas detector owns the tap, so the chip's
+                                                    //    touch target can never eat drag downs again.
+                                                    if (selBtnAtDown != null && !onResizeHandle) {
+                                                        val cx0 = selBtnAtDown.x + selBtnAtDown.w - 150f
+                                                        val cy0 = selBtnAtDown.y - 46f
+                                                        val ux = downPos.x / currentScale
+                                                        val uy = downPos.y / currentScale
+                                                        if (ux >= cx0 && ux <= cx0 + 230f && uy >= cy0 && uy <= cy0 + 62f) {
+                                                            sheetForId = selBtnAtDown.id
+                                                            break
+                                                        }
+                                                    }
+                                                    // 2) Tap (no slop crossed): select in single mode, toggle in multi mode
+                                                    if (hit != null) {
+                                                        if (currentMulti) selectedIds = if (hit.id in selectedIds) selectedIds - hit.id else selectedIds + hit.id
+                                                        else selectedIds = setOf(hit.id)
+                                                    }
+                                                }
+                                                break
+                                            }
+                                            // moved=true: fall through so the drag math below applies the
+                                            // UP position — the commit then matches the finger exactly.
+                                            finalUpdate = true
+                                        }
+                                        if (!moved) {
+                                            totalDist += pc.getDistance()
+                                            if (totalDist <= viewConfiguration.touchSlop) continue  // DO NOT consume yet: keeps verticalScroll usable on empty canvas
+                                            if (hit == null) break   // movement started on empty canvas → let verticalScroll scroll; never consume
+                                            // ENGAGE: select the button (or keep the multi-selection) and snapshot positions
+                                            val groupIds = if (currentMulti && hit.id in selectedIds) selectedIds else setOf(hit.id)
+                                            selectedIds = groupIds
+                                            dragPrimary = hit.id
+                                            dragStarts = currentButtons.filter { it.id in groupIds }.associate { it.id to (it.x to it.y) }
+                                            moved = true
+                                            tapCandidate = false   // a drag must never fire the UP tap handler
+                                            canvasDragging = true  // disable ancestor verticalScroll for this gesture
+                                            c.consume()   // claim the stream from here on: parent verticalScroll cannot steal it
+                                        }
+                                        // DRAG: target = start position + (finger travel since DOWN),
+                                        // then snapped. Absolute tracking survives grid snapping
+                                        // (per-event deltas + snap() used to freeze the button inside
+                                        // its starting 40-unit grid cell).
+                                        c.consume()
+                                        val starts = dragStarts ?: break
+                                        val primary = dragPrimary ?: break
+                                        val myStart = starts[primary] ?: continue
+                                        val totalX = (c.position.x - downPos.x) / currentScale
+                                        val totalY = (c.position.y - downPos.y) / currentScale
+                                        val targetX = (myStart.first + totalX).coerceIn(0f, 1040f)
+                                        val targetY = (myStart.second + totalY).coerceIn(0f, 5000f)
+                                        val pb = currentButtons.first { it.id == primary }
+                                        val (sx, sy) = snapWithGuides(targetX, targetY, pb.w, pb.h)   // existing helper in this scope
+                                        val live = dragAdj?.get(primary) ?: myStart
+                                        val dx = sx - live.first
+                                        val dy = sy - live.second
+                                        dragAdj = starts.mapValues { (id, startPos) ->
+                                            val cur = dragAdj?.get(id) ?: startPos
+                                            if (id == primary) sx to sy
+                                            else (cur.first + dx).coerceIn(0f, 1040f) to (cur.second + dy).coerceIn(0f, 5000f)
+                                        }
+                                        if (finalUpdate) break
+                                    }
+                                    if (moved) {
+                                        dragAdj?.let { moves ->
+                                            app.store.updatePage(rid, page.id) { p ->
+                                                p.copy(buttons = p.buttons.map { bb ->
+                                                    moves[bb.id]?.let { bb.copy(x = it.first, y = it.second) } ?: bb
+                                                })
+                                            }
+                                        }
+                                        dragAdj = null
+                                        dragStarts = null
+                                        dragPrimary = null
+                                        guideV = null
+                                        guideH = null
+                                        canvasDragging = false
+                                    }
+                                }
+                            }
                     ) {
                         // Grid appears while dragging or resizing.
                         if ((dragAdj != null || resizeAdj != null) && gridSnap) {
@@ -315,6 +433,9 @@ fun EditorScreen(app: ForgeApp, nav: NavController, rid: String, initialSelect: 
                                 val bwDp = with(density) { (bw * scale).toDp() }
                                 val bhDp = with(density) { (bh * scale).toDp() }
 
+                                // No pointerInput here on purpose: the canvas-level detector
+                                // above owns every gesture via hitTest, so this chain (and its
+                                // unconditional border) never changes mid-drag.
                                 Box(
                                     Modifier
                                         .offset { androidx.compose.ui.unit.IntOffset((bx * scale).toInt(), (by * scale).toInt()) }
@@ -324,66 +445,6 @@ fun EditorScreen(app: ForgeApp, nav: NavController, rid: String, initialSelect: 
                                             if (isSel) MaterialTheme.colorScheme.primary else Color.Transparent,
                                             shapeOf(b.shape),
                                         )
-                                        .pointerInput(b.id, page.id) {
-                                            // Drag: moves this button, or the whole selection in multi-mode.
-                                            detectDragGestures(
-                                                onDragStart = {
-                                                    dragWasSelected = b.id in selectedIds
-                                                    val groupIds = if (multiMode && dragWasSelected) selectedIds else setOf(b.id)
-                                                    selectedIds = groupIds
-                                                    dragPrimary = b.id
-                                                    dragMoved = false
-                                                    dragStarts = currentButtons.filter { it.id in groupIds }.associate { it.id to (it.x to it.y) }
-                                                },
-                                                onDrag = { change, amt ->
-                                                    val starts = dragStarts ?: return@detectDragGestures
-                                                    val primary = dragPrimary ?: return@detectDragGestures
-                                                    val myStart = starts[primary] ?: return@detectDragGestures
-                                                    change.consume()
-                                                    dragMoved = true
-                                                    val live = dragAdj?.get(primary) ?: myStart
-                                                    val pc = change.positionChangeIgnoreConsumed()
-                                                    val rawX = (live.first + pc.x / scale).coerceIn(0f, 1040f)
-                                                    val rawY = (live.second + pc.y / scale).coerceIn(0f, 5000f)
-                                                    val pb = page.buttons.first { it.id == primary }
-                                                    val (sx, sy) = snapWithGuides(rawX, rawY, pb.w, pb.h)
-                                                    val dx = sx - live.first
-                                                    val dy = sy - live.second
-                                                    dragAdj = starts.mapValues { (id, startPos) ->
-                                                        val cur = dragAdj?.get(id) ?: startPos
-                                                        if (id == primary) sx to sy
-                                                        else (cur.first + dx).coerceIn(0f, 1040f) to (cur.second + dy).coerceIn(0f, 5000f)
-                                                    }
-                                                },
-                                                onDragEnd = {
-                                                    if (!dragMoved && multiMode) {
-                                                        // Tap without movement in multi-select = toggle
-                                                        selectedIds = if (dragWasSelected) selectedIds - b.id else selectedIds + b.id
-                                                    }
-                                                    if (dragMoved) {
-                                                        dragAdj?.let { moves ->
-                                                            app.store.updatePage(rid, page.id) { p ->
-                                                                p.copy(buttons = p.buttons.map { bb ->
-                                                                    moves[bb.id]?.let { bb.copy(x = it.first, y = it.second) } ?: bb
-                                                                })
-                                                            }
-                                                        }
-                                                    }
-                                                    dragAdj = null
-                                                    dragStarts = null
-                                                    dragPrimary = null
-                                                    guideV = null
-                                                    guideH = null
-                                                },
-                                                onDragCancel = {
-                                                    dragAdj = null
-                                                    dragStarts = null
-                                                    dragPrimary = null
-                                                    guideV = null
-                                                    guideH = null
-                                                },
-                                            )
-                                        }
                                 ) {
                                     RemoteButtonView(
                                         button = display,
@@ -394,10 +455,12 @@ fun EditorScreen(app: ForgeApp, nav: NavController, rid: String, initialSelect: 
                                     )
                                 }
 
-                                // Edit chip: opens the properties sheet for the selected button
+                                // Edit chip: VISUAL ONLY. Tapping it is handled by the canvas-level
+                                // detector (chip zone test) — it must never own pointer input, or its
+                                // minimum-touch-target swallows the drag downs that start on the
+                                // selected button (root cause of the dead-drag bug).
                                 if (isSel && selectedIds.size == 1) {
                                     androidx.compose.material3.Surface(
-                                        onClick = { sheetForId = b.id },
                                         shape = RoundedCornerShape(10.dp),
                                         color = MaterialTheme.colorScheme.primary,
                                         shadowElevation = 4.dp,
@@ -542,7 +605,7 @@ fun EditorScreen(app: ForgeApp, nav: NavController, rid: String, initialSelect: 
         }
     }
 
-    // Selected button property sheet — opened by LONG-PRESS only
+    // Selected button property sheet — opened by the ✏️ chip next to the selected button
     if (sheetButton != null) {
         ButtonPropsSheet(
             app = app,
