@@ -4,15 +4,17 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
@@ -20,15 +22,17 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.DoneAll
 import androidx.compose.material.icons.filled.GridOn
-import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Link
+import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -48,23 +52,33 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.changedToUpIgnoreConsumed
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChangeIgnoreConsumed
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import io.github.hackyday.irforge.ForgeApp
 import io.github.hackyday.irforge.data.Action
 import io.github.hackyday.irforge.data.ButtonShape
+import io.github.hackyday.irforge.data.Code
+import io.github.hackyday.irforge.data.Page
 import io.github.hackyday.irforge.data.RButton
 import io.github.hackyday.irforge.data.newId
 import io.github.hackyday.irforge.editor.TEMPLATES
@@ -76,6 +90,8 @@ import io.github.hackyday.irforge.ui.components.RemoteButtonView
 import io.github.hackyday.irforge.ui.components.parseColor
 import io.github.hackyday.irforge.ui.components.shapeOf
 
+private fun starts0(m: Map<String, Pair<Float, Float>>?, id: String): Pair<Float, Float>? = m?.get(id)
+
 private val QUICK_EMOJI = listOf("🔌", "🔊", "🔉", "🔇", "▲", "▼", "◀", "▶", "OK", "⏯", "⏮", "⏭", "🏠", "↩", "☰", "ℹ", "⏱", "❄", "⚡", "💡")
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -86,22 +102,30 @@ fun EditorScreen(app: ForgeApp, nav: NavController, rid: String, initialSelect: 
     val macros by app.store.macros.collectAsState()
     val r = remotes.firstOrNull { it.id == rid }
     if (r == null) {
-        androidx.compose.runtime.LaunchedEffect(Unit) { nav.popBackStack() }
+        LaunchedEffect(Unit) { nav.popBackStack() }
         return
     }
     var pageIdx by remember(rid) { mutableStateOf(0) }
-    var selectedId by remember(rid) { mutableStateOf(initialSelect.ifEmpty { null }) }
-    var dragAdj by remember { mutableStateOf<Pair<String, Pair<Float, Float>>?>(null) } // id -> (x,y)
-    var resizeAdj by remember { mutableStateOf<Pair<String, Pair<Float, Float>>?>(null) } // id -> (w,h)
+    var selectedIds by remember(rid) { mutableStateOf<Set<String>>(if (initialSelect.isNotEmpty()) setOf(initialSelect) else emptySet()) }
+    var multiMode by remember(rid) { mutableStateOf(false) }
+    var sheetForId by remember(rid) { mutableStateOf(initialSelect.ifEmpty { null }) }
+    var dragAdj by remember { mutableStateOf<Map<String, Pair<Float, Float>>?>(null) }
+    var dragStarts by remember { mutableStateOf<Map<String, Pair<Float, Float>>?>(null) }
+    var dragPrimary by remember { mutableStateOf<String?>(null) }
+    var dragMoved by remember { mutableStateOf(false) }
+    var dragWasSelected by remember { mutableStateOf(false) }
+    var resizeAdj by remember { mutableStateOf<Pair<String, Pair<Float, Float>>?>(null) }
     var gridSnap by remember { mutableStateOf(true) }
     var canvasW by remember { mutableStateOf(1080) }
-    var showMenu by remember { mutableStateOf(false) }
     var showRemoteSettings by remember { mutableStateOf(false) }
     var showTemplates by remember { mutableStateOf(false) }
     var showPages by remember { mutableStateOf(false) }
+    var showGroupSheet by remember { mutableStateOf(false) }
+    var showGroupAssign by remember { mutableStateOf(false) }
+    var confirmGroupDelete by remember { mutableStateOf(false) }
 
     val page = r.pages.getOrNull(pageIdx) ?: r.pages.firstOrNull() ?: return
-    val selected = page.buttons.firstOrNull { it.id == selectedId }
+    val sheetButton = page.buttons.firstOrNull { it.id == sheetForId }
 
     fun snap(v: Float): Float = if (gridSnap) (v / 40f).toInt() * 40f else v
 
@@ -114,275 +138,470 @@ fun EditorScreen(app: ForgeApp, nav: NavController, rid: String, initialSelect: 
                     y = if (maxY > 0f) snap(maxY + 40f) else 40f, w = 240f, h = 140f,
                 )
                 app.store.updatePage(rid, page.id) { it.copy(buttons = it.buttons + b) }
-                selectedId = b.id
+                selectedIds = setOf(b.id)
             }) { Icon(Icons.Filled.Add, "Add button") }
         },
     ) { pad ->
-        Column(Modifier.padding(pad).fillMaxSize()) {
-            TopAppBar(
-                title = { Text("Edit · ${r.name}", maxLines = 1) },
-                navigationIcon = { IconButton(onClick = { nav.popBackStack() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") } },
-                actions = {
-                    IconButton(onClick = { gridSnap = !gridSnap }) {
-                        Icon(Icons.Filled.GridOn, "Grid snap", tint = if (gridSnap) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                    IconButton(onClick = { showPages = true }) { Text("🗂") }
-                    IconButton(onClick = { showTemplates = true }) { Text("🧩") }
-                    IconButton(onClick = { showRemoteSettings = true }) { Icon(Icons.Filled.Tune, "Remote settings") }
-                },
-            )
-            if (r.pages.size > 1) {
-                ScrollableTabRow(selectedTabIndex = pageIdx, edgePadding = 8.dp) {
-                    r.pages.forEachIndexed { i, p ->
-                        Tab(
-                            selected = i == pageIdx,
-                            onClick = { pageIdx = i; selectedId = null },
-                            text = { Text(p.name) },
-                        )
-                    }
-                }
-            }
-            // One-tap bridge from imported codes to this remote's unassigned buttons.
-            val unassigned = page.buttons.count { it.action == null }
-            val hasExtrasPage = r.pages.any { it.name == "Extras" }
-            var autoFillHidden by remember(rid) { mutableStateOf(false) }
-            if (codes.isNotEmpty() && unassigned > 0 && !hasExtrasPage && !autoFillHidden) {
-                androidx.compose.material3.Card(
-                    Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
-                    colors = androidx.compose.material3.CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.secondary.copy(alpha = 0.15f),
-                    ),
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(start = 12.dp)) {
-                        Column(Modifier.weight(1f)) {
-                            Text(
-                                "$unassigned button(s) have no code yet",
-                                style = MaterialTheme.typography.labelLarge,
-                            )
-                            Text(
-                                "${codes.size} codes in the library",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+        androidx.compose.foundation.layout.Box(Modifier.padding(pad).fillMaxSize()) {
+            Column(Modifier.fillMaxSize()) {
+                TopAppBar(
+                    title = { Text("Edit · ${r.name}", maxLines = 1) },
+                    navigationIcon = { IconButton(onClick = { nav.popBackStack() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") } },
+                    actions = {
+                        IconButton(onClick = {
+                            multiMode = !multiMode
+                            if (!multiMode) selectedIds = emptySet()
+                        }) {
+                            Icon(
+                                Icons.Filled.DoneAll,
+                                "Multi-select",
+                                tint = if (multiMode) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         }
-                        Button(onClick = {
-                            val (assigned, _) = assignCodesToRemote(r, codes)
-                            app.store.upsertRemote(assigned)
-                            autoFillHidden = true
-                        }) { Text("Auto-fill") }
-                        IconButton(onClick = { autoFillHidden = true }) {
-                            Icon(Icons.Filled.Close, "Dismiss")
+                        IconButton(onClick = { gridSnap = !gridSnap }) {
+                            Icon(Icons.Filled.GridOn, "Grid snap", tint = if (gridSnap) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        IconButton(onClick = { showPages = true }) { Text("🗂") }
+                        IconButton(onClick = { showTemplates = true }) { Text("🧩") }
+                        IconButton(onClick = { showRemoteSettings = true }) { Icon(Icons.Filled.Tune, "Remote settings") }
+                    },
+                )
+                if (r.pages.size > 1) {
+                    ScrollableTabRow(selectedTabIndex = pageIdx, edgePadding = 8.dp) {
+                        r.pages.forEachIndexed { i, p ->
+                            Tab(
+                                selected = i == pageIdx,
+                                onClick = { pageIdx = i; selectedIds = emptySet(); sheetForId = null },
+                                text = { Text(p.name) },
+                            )
                         }
                     }
                 }
-            }
-            val density = LocalDensity.current
-            var guideV by remember { mutableStateOf<Float?>(null) }
-            var guideH by remember { mutableStateOf<Float?>(null) }
-            Column(
-                Modifier
-                    .fillMaxSize()
-                    .verticalScroll(rememberScrollState())
-                    .background(Brush.verticalGradient(listOf(parseColor(r.bgStart), parseColor(r.bgEnd, parseColor(r.bgStart)))))
-                    .pointerInput(page.id) {
-                        detectTapGestures(onTap = { selectedId = null })
-                    }
-                    .onSizeChanged { canvasW = it.width },
-            ) {
-                val scale = canvasW.toFloat() / CANVAS_W
-
-                /** Magnetic snap: grid first, then align to sibling edges / margins / center. */
-                fun snapWithGuides(x: Float, y: Float, w: Float, h: Float, selfId: String): Pair<Float, Float> {
-                    var nx = if (gridSnap) snap(x) else x
-                    var ny = if (gridSnap) snap(y) else y
-                    var gv: Float? = null
-                    var gh: Float? = null
-                    val tol = 12f
-                    val xs = mutableListOf(40f, 540f, 1040f)
-                    val ys = mutableListOf(40f)
-                    for (o in page.buttons) {
-                        if (o.id == selfId) continue
-                        xs.add(o.x); xs.add(o.x + o.w)
-                        ys.add(o.y); ys.add(o.y + o.h)
-                    }
-                    for (cand in xs) {
-                        if (kotlin.math.abs(nx - cand) <= tol) { nx = cand; gv = cand; break }
-                        if (kotlin.math.abs(nx + w - cand) <= tol) { nx = cand - w; gv = cand; break }
-                    }
-                    for (cand in ys) {
-                        if (kotlin.math.abs(ny - cand) <= tol) { ny = cand; gh = cand; break }
-                        if (kotlin.math.abs(ny + h - cand) <= tol) { ny = cand - h; gh = cand; break }
-                    }
-                    guideV = gv
-                    guideH = gh
-                    return nx to ny
-                }
-
-                val baseMax = page.buttons.maxOfOrNull { b ->
-                    val adj = resizeAdj?.takeIf { it.first == b.id }?.second
-                    (adj?.second ?: b.h) + (dragAdj?.takeIf { it.first == b.id }?.second?.second ?: b.y)
-                } ?: 600f
-                val canvasH = (baseMax + 140f) * scale
-                Box(Modifier.fillMaxWidth().height(with(density) { canvasH.toDp() })) {
-                    // Grid appears while dragging or resizing.
-                    if ((dragAdj != null || resizeAdj != null) && gridSnap) {
-                        androidx.compose.foundation.Canvas(Modifier.matchParentSize()) {
-                            val step = 40f * scale
-                            var gx = 0f
-                            while (gx <= size.width) {
-                                drawLine(androidx.compose.ui.graphics.Color.White.copy(alpha = 0.05f),
-                                    androidx.compose.ui.geometry.Offset(gx, 0f), androidx.compose.ui.geometry.Offset(gx, size.height), 1f)
-                                gx += step
-                            }
-                            var gy = 0f
-                            while (gy <= size.height) {
-                                drawLine(androidx.compose.ui.graphics.Color.White.copy(alpha = 0.05f),
-                                    androidx.compose.ui.geometry.Offset(0f, gy), androidx.compose.ui.geometry.Offset(size.width, gy), 1f)
-                                gy += step
-                            }
-                        }
-                    }
-                    guideV?.let { vx ->
-                        Box(
-                            Modifier
-                                .offset { androidx.compose.ui.unit.IntOffset((vx * scale).toInt(), 0) }
-                                .fillMaxHeight().width(1.5.dp)
-                                .background(androidx.compose.ui.graphics.Color(0x88FF5252)),
-                        )
-                    }
-                    guideH?.let { hy ->
-                        Box(
-                            Modifier
-                                .offset { androidx.compose.ui.unit.IntOffset(0, (hy * scale).toInt()) }
-                                .fillMaxWidth().height(1.5.dp)
-                                .background(androidx.compose.ui.graphics.Color(0x88FF5252)),
-                        )
-                    }
-                    for (b in page.buttons) {
-                        val drag = dragAdj?.takeIf { it.first == b.id }?.second
-                        val rs = resizeAdj?.takeIf { it.first == b.id }?.second
-                        val bx = drag?.first ?: b.x
-                        val by = drag?.second ?: b.y
-                        val bw = rs?.first ?: b.w
-                        val bh = rs?.second ?: b.h
-                        val display = b.copy(x = bx, y = by, w = bw, h = bh)
-                        val isSel = b.id == selectedId
-                        val bwDp = with(density) { (bw * scale).toDp() }
-                        val bhDp = with(density) { (bh * scale).toDp() }
-
-                        Box(
-                            Modifier
-                                .offset { androidx.compose.ui.unit.IntOffset((bx * scale).toInt(), (by * scale).toInt()) }
-                                .size(width = bwDp, height = bhDp)
-                                .then(
-                                    if (isSel) Modifier.border(2.dp, MaterialTheme.colorScheme.primary, shapeOf(b.shape))
-                                    else Modifier,
+                // One-tap bridge from imported codes to this remote's unassigned buttons.
+                val unassigned = page.buttons.count { it.action == null }
+                val hasExtrasPage = r.pages.any { it.name == "Extras" }
+                var autoFillHidden by remember(rid) { mutableStateOf(false) }
+                if (codes.isNotEmpty() && unassigned > 0 && !hasExtrasPage && !autoFillHidden) {
+                    androidx.compose.material3.Card(
+                        Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
+                        colors = androidx.compose.material3.CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.secondary.copy(alpha = 0.15f),
+                        ),
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(start = 12.dp)) {
+                            Column(Modifier.weight(1f)) {
+                                Text("$unassigned button(s) have no code yet", style = MaterialTheme.typography.labelLarge)
+                                Text(
+                                    "${codes.size} codes in the library",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
-                                .pointerInput(b.id, page.id, gridSnap) {
-                                    detectDragGestures(
-                                        onDragStart = { selectedId = b.id },
-                                        onDrag = { change, amt ->
-                                            change.consume()
-                                            val cur = dragAdj?.takeIf { it.first == b.id }?.second ?: (b.x to b.y)
-                                            val rawX = (cur.first + amt.x / scale).coerceIn(0f, 1040f)
-                                            val rawY = (cur.second + amt.y / scale).coerceIn(0f, 5000f)
-                                            val (sx, sy) = snapWithGuides(rawX, rawY, b.w, b.h, b.id)
-                                            dragAdj = b.id to (sx to sy)
-                                        },
-                                        onDragEnd = {
-                                            dragAdj?.takeIf { it.first == b.id }?.let { (_, xy) ->
-                                                app.store.updateButton(rid, page.id, b.id) {
-                                                    it.copy(x = xy.first, y = xy.second)
-                                                }
-                                            }
-                                            dragAdj = null
-                                            guideV = null
-                                            guideH = null
-                                        },
-                                        onDragCancel = {
-                                            dragAdj = null
-                                            guideV = null
-                                            guideH = null
-                                        },
-                                    )
-                                }
-                                .pointerInput(b.id, page.id) {
-                                    detectTapGestures(onTap = { selectedId = b.id })
-                                },
-                        ) {
-                            RemoteButtonView(
-                                button = display,
-                                remote = r,
-                                fontSizePx = b.fontSize * scale,
-                                showUnassignedBadge = b.action == null,
-                                modifier = Modifier.fillMaxSize(),
-                            )
+                            }
+                            Button(onClick = {
+                                val (assigned, _) = assignCodesToRemote(r, codes)
+                                app.store.upsertRemote(assigned)
+                                autoFillHidden = true
+                            }) { Text("Auto-fill") }
+                            IconButton(onClick = { autoFillHidden = true }) { Icon(Icons.Filled.Close, "Dismiss") }
                         }
+                    }
+                }
 
-                        // Resize handle (bottom-right corner of the selected button)
-                        if (isSel) {
+                val density = LocalDensity.current
+                var guideV by remember { mutableStateOf<Float?>(null) }
+                var guideH by remember { mutableStateOf<Float?>(null) }
+                Column(
+                    Modifier
+                        .fillMaxSize()
+                        .verticalScroll(rememberScrollState())
+                        .background(Brush.verticalGradient(listOf(parseColor(r.bgStart), parseColor(r.bgEnd, parseColor(r.bgStart)))))
+                        .onSizeChanged { canvasW = it.width },
+                ) {
+                    val scale = canvasW.toFloat() / CANVAS_W
+                    val currentScale by rememberUpdatedState(scale)
+                    val currentButtons by rememberUpdatedState(page.buttons)
+                    val currentMulti by rememberUpdatedState(multiMode)
+                    fun hitTest(ux: Float, uy: Float) = currentButtons.lastOrNull {
+                        ux >= it.x && ux <= it.x + it.w && uy >= it.y && uy <= it.y + it.h
+                    }
+
+                    /** Magnetic snap for the primary dragged button; guide lines report alignment. */
+                    fun snapWithGuides(x: Float, y: Float, w: Float, h: Float): Pair<Float, Float> {
+                        var nx = if (gridSnap) snap(x) else x
+                        var ny = if (gridSnap) snap(y) else y
+                        var gv: Float? = null
+                        var gh: Float? = null
+                        val tol = 12f
+                        val ids = dragStarts?.keys ?: emptySet()
+                        val xs = mutableListOf(40f, 540f, 1040f)
+                        val ys = mutableListOf(40f)
+                        for (o in currentButtons) {
+                            if (o.id in ids) continue
+                            xs.add(o.x); xs.add(o.x + o.w)
+                            ys.add(o.y); ys.add(o.y + o.h)
+                        }
+                        for (cand in xs) {
+                            if (kotlin.math.abs(nx - cand) <= tol) { nx = cand; gv = cand; break }
+                            if (kotlin.math.abs(nx + w - cand) <= tol) { nx = cand - w; gv = cand; break }
+                        }
+                        for (cand in ys) {
+                            if (kotlin.math.abs(ny - cand) <= tol) { ny = cand; gh = cand; break }
+                            if (kotlin.math.abs(ny + h - cand) <= tol) { ny = cand - h; gh = cand; break }
+                        }
+                        guideV = gv
+                        guideH = gh
+                        return nx to ny
+                    }
+
+                    val baseMax = page.buttons.maxOfOrNull { b ->
+                        val adj = resizeAdj?.takeIf { it.first == b.id }?.second
+                        val dpos = dragAdj?.get(b.id)?.second
+                        (adj?.second ?: b.h) + (dpos ?: b.y)
+                    } ?: 600f
+                    val canvasH = (baseMax + 140f) * scale
+
+                    // Canvas surface: ALL gestures live here (one detector, hit-tested),
+                    // so per-button recompositions can never kill an active drag.
+                    // TAP detector declared first; the DRAG detector below is innermost
+                    // and therefore wins the touch-slop race.
+                    Box(
+                        Modifier
+                            .fillMaxWidth()
+                            .height(with(density) { canvasH.toDp() })
+
+                    ) {
+                        // Grid appears while dragging or resizing.
+                        if ((dragAdj != null || resizeAdj != null) && gridSnap) {
+                            androidx.compose.foundation.Canvas(Modifier.matchParentSize()) {
+                                val step = 40f * scale
+                                var gx = 0f
+                                while (gx <= size.width) {
+                                    drawLine(Color.White.copy(alpha = 0.05f), androidx.compose.ui.geometry.Offset(gx, 0f), androidx.compose.ui.geometry.Offset(gx, size.height), 1f)
+                                    gx += step
+                                }
+                                var gy = 0f
+                                while (gy <= size.height) {
+                                    drawLine(Color.White.copy(alpha = 0.05f), androidx.compose.ui.geometry.Offset(0f, gy), androidx.compose.ui.geometry.Offset(size.width, gy), 1f)
+                                    gy += step
+                                }
+                            }
+                        }
+                        guideV?.let { vx ->
                             Box(
                                 Modifier
-                                    .offset { androidx.compose.ui.unit.IntOffset(((bx + bw) * scale - 26).toInt(), ((by + bh) * scale - 26).toInt()) }
-                                    .size(26.dp)
-                                    .background(MaterialTheme.colorScheme.primary, CircleShape)
-                                    .border(2.dp, androidx.compose.ui.graphics.Color.White, CircleShape)
-                                    .pointerInput(b.id, page.id, gridSnap) {
-                                        detectDragGestures(
-                                            onDrag = { change, amt ->
-                                                change.consume()
-                                                val cur = resizeAdj?.takeIf { it.first == b.id }?.second ?: (b.w to b.h)
-                                                val nw = (cur.first + amt.x / scale).coerceAtLeast(60f)
-                                                val nh = (cur.second + amt.y / scale).coerceAtLeast(50f)
-                                                resizeAdj = b.id to ((if (gridSnap) snap(nw) else nw) to (if (gridSnap) snap(nh) else nh))
-                                            },
-                                            onDragEnd = {
-                                                resizeAdj?.takeIf { it.first == b.id }?.let { (_, wh) ->
-                                                    app.store.updateButton(rid, page.id, b.id) {
-                                                        it.copy(w = wh.first, h = wh.second)
-                                                    }
-                                                }
-                                                resizeAdj = null
-                                            },
-                                            onDragCancel = { resizeAdj = null },
-                                        )
-                                    },
+                                    .offset { androidx.compose.ui.unit.IntOffset((vx * scale).toInt(), 0) }
+                                    .fillMaxHeight().width(1.5.dp)
+                                    .background(Color(0x88FF5252)),
                             )
                         }
-                    }
-                    // Live coordinates while dragging
-                    dragAdj?.let { (_, xy) ->
-                        androidx.compose.material3.Surface(
-                            color = androidx.compose.ui.graphics.Color(0xCC12131A),
-                            shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp),
-                            modifier = Modifier.align(Alignment.TopStart).padding(8.dp),
-                        ) {
-                            Text(
-                                "x ${xy.first.toInt()}   y ${xy.second.toInt()}",
-                                Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-                                color = androidx.compose.ui.graphics.Color.White,
-                                style = MaterialTheme.typography.labelSmall,
+                        guideH?.let { hy ->
+                            Box(
+                                Modifier
+                                    .offset { androidx.compose.ui.unit.IntOffset(0, (hy * scale).toInt()) }
+                                    .fillMaxWidth().height(1.5.dp)
+                                    .background(Color(0x88FF5252)),
                             )
+                        }
+                        for (b in page.buttons) {
+                            key(b.id) {
+                                val drag = dragAdj?.get(b.id)
+                                val rs = resizeAdj?.takeIf { it.first == b.id }?.second
+                                val bx = drag?.first ?: b.x
+                                val by = drag?.second ?: b.y
+                                val bw = rs?.first ?: b.w
+                                val bh = rs?.second ?: b.h
+                                val display = b.copy(x = bx, y = by, w = bw, h = bh)
+                                val isSel = b.id in selectedIds
+                                val bwDp = with(density) { (bw * scale).toDp() }
+                                val bhDp = with(density) { (bh * scale).toDp() }
+
+                                Box(
+                                    Modifier
+                                        .offset { androidx.compose.ui.unit.IntOffset((bx * scale).toInt(), (by * scale).toInt()) }
+                                        .size(width = bwDp, height = bhDp)
+                                        .border(
+                                            2.dp,
+                                            if (isSel) MaterialTheme.colorScheme.primary else Color.Transparent,
+                                            shapeOf(b.shape),
+                                        )
+                                        .pointerInput(b.id, page.id) {
+                                            // Drag: moves this button, or the whole selection in multi-mode.
+                                            detectDragGestures(
+                                                onDragStart = {
+                                                    dragWasSelected = b.id in selectedIds
+                                                    val groupIds = if (multiMode && dragWasSelected) selectedIds else setOf(b.id)
+                                                    selectedIds = groupIds
+                                                    dragPrimary = b.id
+                                                    dragMoved = false
+                                                    dragStarts = currentButtons.filter { it.id in groupIds }.associate { it.id to (it.x to it.y) }
+                                                },
+                                                onDrag = { change, amt ->
+                                                    val starts = dragStarts ?: return@detectDragGestures
+                                                    val primary = dragPrimary ?: return@detectDragGestures
+                                                    val myStart = starts[primary] ?: return@detectDragGestures
+                                                    change.consume()
+                                                    dragMoved = true
+                                                    val live = dragAdj?.get(primary) ?: myStart
+                                                    val pc = change.positionChangeIgnoreConsumed()
+                                                    val rawX = (live.first + pc.x / scale).coerceIn(0f, 1040f)
+                                                    val rawY = (live.second + pc.y / scale).coerceIn(0f, 5000f)
+                                                    val pb = page.buttons.first { it.id == primary }
+                                                    val (sx, sy) = snapWithGuides(rawX, rawY, pb.w, pb.h)
+                                                    val dx = sx - live.first
+                                                    val dy = sy - live.second
+                                                    dragAdj = starts.mapValues { (id, startPos) ->
+                                                        val cur = dragAdj?.get(id) ?: startPos
+                                                        if (id == primary) sx to sy
+                                                        else (cur.first + dx).coerceIn(0f, 1040f) to (cur.second + dy).coerceIn(0f, 5000f)
+                                                    }
+                                                },
+                                                onDragEnd = {
+                                                    if (!dragMoved && multiMode) {
+                                                        // Tap without movement in multi-select = toggle
+                                                        selectedIds = if (dragWasSelected) selectedIds - b.id else selectedIds + b.id
+                                                    }
+                                                    if (dragMoved) {
+                                                        dragAdj?.let { moves ->
+                                                            app.store.updatePage(rid, page.id) { p ->
+                                                                p.copy(buttons = p.buttons.map { bb ->
+                                                                    moves[bb.id]?.let { bb.copy(x = it.first, y = it.second) } ?: bb
+                                                                })
+                                                            }
+                                                        }
+                                                    }
+                                                    dragAdj = null
+                                                    dragStarts = null
+                                                    dragPrimary = null
+                                                    guideV = null
+                                                    guideH = null
+                                                },
+                                                onDragCancel = {
+                                                    dragAdj = null
+                                                    dragStarts = null
+                                                    dragPrimary = null
+                                                    guideV = null
+                                                    guideH = null
+                                                },
+                                            )
+                                        }
+                                ) {
+                                    RemoteButtonView(
+                                        button = display,
+                                        remote = r,
+                                        fontSizePx = b.fontSize * scale,
+                                        showUnassignedBadge = b.action == null,
+                                        modifier = Modifier.fillMaxSize(),
+                                    )
+                                }
+
+                                // Edit chip: opens the properties sheet for the selected button
+                                if (isSel && selectedIds.size == 1) {
+                                    androidx.compose.material3.Surface(
+                                        onClick = { sheetForId = b.id },
+                                        shape = RoundedCornerShape(10.dp),
+                                        color = MaterialTheme.colorScheme.primary,
+                                        shadowElevation = 4.dp,
+                                        modifier = Modifier
+                                            .offset { androidx.compose.ui.unit.IntOffset(((bx + bw) * scale - 150).toInt().coerceAtLeast(0), ((by - 46) * scale).toInt().coerceAtLeast(0)) },
+                                    ) {
+                                        Text(
+                                            "✏️ Proprietà",
+                                            Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                            color = Color.White,
+                                            style = MaterialTheme.typography.labelSmall,
+                                        )
+                                    }
+                                }
+
+                                // Resize handle (single selection only)
+                                if (isSel && selectedIds.size == 1) {
+                                    Box(
+                                        Modifier
+                                            .offset { androidx.compose.ui.unit.IntOffset(((bx + bw) * scale - 26).toInt(), ((by + bh) * scale - 26).toInt()) }
+                                            .size(26.dp)
+                                            .background(MaterialTheme.colorScheme.primary, CircleShape)
+                                            .border(2.dp, Color.White, CircleShape)
+                                            .pointerInput(b.id, page.id, gridSnap) {
+                                                detectDragGestures(
+                                                    onDrag = { change, amt ->
+                                                        change.consume()
+                                                        val cur = resizeAdj?.takeIf { it.first == b.id }?.second ?: (b.w to b.h)
+                                                        val nw = (cur.first + amt.x / scale).coerceAtLeast(60f)
+                                                        val nh = (cur.second + amt.y / scale).coerceAtLeast(50f)
+                                                        resizeAdj = b.id to ((if (gridSnap) snap(nw) else nw) to (if (gridSnap) snap(nh) else nh))
+                                                    },
+                                                    onDragEnd = {
+                                                        resizeAdj?.takeIf { it.first == b.id }?.let { (_, wh) ->
+                                                            app.store.updateButton(rid, page.id, b.id) {
+                                                                it.copy(w = wh.first, h = wh.second)
+                                                            }
+                                                        }
+                                                        resizeAdj = null
+                                                    },
+                                                    onDragCancel = { resizeAdj = null },
+                                                )
+                                            },
+                                    )
+                                }
+                            }
+                        }
+                        // Live coordinates while dragging
+                        dragAdj?.let { moves ->
+                            dragPrimary?.let { pid ->
+                                val xy = moves[pid] ?: return@let
+                                androidx.compose.material3.Surface(
+                                    color = Color(0xCC12131A),
+                                    shape = RoundedCornerShape(8.dp),
+                                    modifier = Modifier.align(Alignment.TopStart).padding(8.dp),
+                                ) {
+                                    Text(
+                                        "x ${xy.first.toInt()}   y ${xy.second.toInt()}",
+                                        Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                        color = Color.White,
+                                        style = MaterialTheme.typography.labelSmall,
+                                    )
+                                }
+                            }
                         }
                     }
                 }
+
+                }
+
+                // Floating multi-select action bar (overlays canvas — no layout shift)
+                if (multiMode && selectedIds.isNotEmpty()) {
+                    androidx.compose.material3.Surface(
+                        color = MaterialTheme.colorScheme.surfaceVariant,
+                        shape = RoundedCornerShape(16.dp),
+                        shadowElevation = 6.dp,
+                        modifier = Modifier
+                            .align(Alignment.BottomCenter)
+                            .padding(horizontal = 16.dp, vertical = 16.dp),
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(horizontal = 8.dp)) {
+                            Text(
+                                "${selectedIds.size} selected",
+                                Modifier.padding(start = 6.dp, end = 4.dp),
+                                style = MaterialTheme.typography.labelLarge,
+                            )
+                            if (selectedIds.size == 1) {
+                                fun nudge(dx: Float, dy: Float) {
+                                    val id = selectedIds.first()
+                                    app.store.updatePage(rid, page.id) { p ->
+                                        p.copy(buttons = p.buttons.map { bb ->
+                                            if (bb.id == id) bb.copy(x = (bb.x + dx).coerceIn(0f, 1040f), y = (bb.y + dy).coerceIn(0f, 5000f)) else bb
+                                        })
+                                    }
+                                }
+                                IconButton(onClick = { nudge(0f, -10f) }) { Text("↑", style = MaterialTheme.typography.labelLarge) }
+                                IconButton(onClick = { nudge(0f, 10f) }) { Text("↓", style = MaterialTheme.typography.labelLarge) }
+                                IconButton(onClick = { nudge(-10f, 0f) }) { Text("←", style = MaterialTheme.typography.labelLarge) }
+                                IconButton(onClick = { nudge(10f, 0f) }) { Text("→", style = MaterialTheme.typography.labelLarge) }
+                            }
+                            IconButton(onClick = { showGroupSheet = true }) { Icon(Icons.Filled.Palette, "Style selected") }
+                            IconButton(onClick = { showGroupAssign = true }) { Icon(Icons.Filled.Link, "Assign code to selected") }
+                            IconButton(onClick = { confirmGroupDelete = true }) { Icon(Icons.Filled.Delete, "Delete selected", tint = MaterialTheme.colorScheme.error) }
+                            IconButton(onClick = { selectedIds = emptySet(); multiMode = false }) { Icon(Icons.Filled.Close, "Exit multi-select") }
+                        }
+                    }
+                } else if (multiMode) {
+                    androidx.compose.material3.Surface(
+                        color = MaterialTheme.colorScheme.surfaceVariant,
+                        shape = RoundedCornerShape(16.dp),
+                        shadowElevation = 6.dp,
+                        modifier = Modifier
+                            .align(Alignment.BottomCenter)
+                            .padding(horizontal = 16.dp, vertical = 16.dp),
+                    ) {
+                        Text(
+                            "Multi-select: tap buttons to add or remove them",
+                            Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                            style = MaterialTheme.typography.labelLarge,
+                        )
+                    }
+            }
+
+            // Group delete confirmation
+            if (confirmGroupDelete && selectedIds.isNotEmpty()) {
+                AlertDialog(
+                    onDismissRequest = { confirmGroupDelete = false },
+                    title = { Text("Delete ${selectedIds.size} button(s)?") },
+                    text = { Text("They will be removed from this page. Codes stay in the library.") },
+                    confirmButton = {
+                        TextButton(onClick = {
+                            app.store.updatePage(rid, page.id) { p ->
+                                p.copy(buttons = p.buttons.filterNot { it.id in selectedIds })
+                            }
+                            selectedIds = emptySet()
+                            confirmGroupDelete = false
+                        }) { Text("Delete", color = Color(0xFFEF5350)) }
+                    },
+                    dismissButton = { TextButton(onClick = { confirmGroupDelete = false }) { Text("Cancel") } },
+                )
             }
         }
     }
 
-    // Selected button property sheet
-    if (selected != null) {
+    // Selected button property sheet — opened by LONG-PRESS only
+    if (sheetButton != null) {
         ButtonPropsSheet(
             app = app,
             rid = rid,
             pageId = page.id,
-            button = selected,
+            button = sheetButton,
             hasCodes = codes.isNotEmpty() || macros.isNotEmpty(),
             onDelete = {
-                app.store.removeButton(rid, page.id, selected.id)
-                selectedId = null
+                app.store.removeButton(rid, page.id, sheetButton.id)
+                sheetForId = null
+                selectedIds = selectedIds - sheetButton.id
             },
-            onDismiss = { selectedId = null },
+            onDismiss = { sheetForId = null },
+        )
+    }
+
+    // Group (multi-select) property sheet
+    if (showGroupSheet && selectedIds.isNotEmpty()) {
+        GroupPropsSheet(
+            app = app,
+            rid = rid,
+            pageId = page.id,
+            ids = selectedIds,
+            first = page.buttons.first { it.id in selectedIds },
+            onDismiss = { showGroupSheet = false },
+            onAssignClick = { showGroupAssign = true },
+            onDeleteClick = { confirmGroupDelete = true },
+            onAlign = { mode ->
+                val sel = page.buttons.filter { it.id in selectedIds }
+                if (sel.isNotEmpty()) {
+                    app.store.updatePage(rid, page.id) { p ->
+                        p.copy(buttons = p.buttons.map { bb ->
+                            if (bb.id !in selectedIds) bb else when (mode) {
+                                "left" -> bb.copy(x = sel.minOf { it.x })
+                                "right" -> bb.copy(x = sel.maxOf { it.x + it.w } - bb.w)
+                                "top" -> bb.copy(y = sel.minOf { it.y })
+                                "bottom" -> bb.copy(y = sel.maxOf { it.y + it.h } - bb.h)
+                                "size" -> bb.copy(w = sel.first().w, h = sel.first().h)
+                                else -> bb
+                            }
+                        })
+                    }
+                }
+            },
+        )
+    }
+
+    // Group assign code
+    if (showGroupAssign && selectedIds.isNotEmpty()) {
+        ActionPickerDialog(
+            app = app,
+            forLongPress = false,
+            onDismiss = { showGroupAssign = false },
+            onPick = { action ->
+                app.store.updatePage(rid, page.id) { p ->
+                    p.copy(buttons = p.buttons.map { if (it.id in selectedIds) it.copy(action = action) else it })
+                }
+                showGroupAssign = false
+            },
         )
     }
 
@@ -422,6 +641,27 @@ private fun ButtonPropsSheet(
                 modifier = Modifier.fillMaxWidth(),
             )
             Spacer(Modifier.height(6.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(
+                    value = button.x.toInt().toString(),
+                    onValueChange = { v ->
+                        v.toFloatOrNull()?.let { nx -> app.store.updateButton(rid, pageId, button.id) { it.copy(x = nx.coerceIn(0f, 1040f)) } }
+                    },
+                    label = { Text("X") },
+                    singleLine = true,
+                    modifier = Modifier.weight(1f),
+                )
+                OutlinedTextField(
+                    value = button.y.toInt().toString(),
+                    onValueChange = { v ->
+                        v.toFloatOrNull()?.let { ny -> app.store.updateButton(rid, pageId, button.id) { it.copy(y = ny.coerceIn(0f, 5000f)) } }
+                    },
+                    label = { Text("Y") },
+                    singleLine = true,
+                    modifier = Modifier.weight(1f),
+                )
+            }
+            Spacer(Modifier.height(6.dp))
             Text("Icon / emoji", style = MaterialTheme.typography.labelMedium)
             OutlinedTextField(
                 value = button.icon,
@@ -450,11 +690,7 @@ private fun ButtonPropsSheet(
                         ),
                         contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp),
                     ) {
-                        Text(
-                            s.name.lowercase().replaceFirstChar { it.uppercase() },
-                            maxLines = 1,
-                            style = MaterialTheme.typography.labelSmall,
-                        )
+                        Text(s.name.lowercase().replaceFirstChar { it.uppercase() }, maxLines = 1, style = MaterialTheme.typography.labelSmall)
                     }
                 }
             }
@@ -519,7 +755,7 @@ private fun ButtonPropsSheet(
                         app.store.updateButton(rid, pageId, button.id) { it.copy(action = null) }
                     }) { Text("None") }
                 }
-                Button(onClick = { pickAction = true }, enabled = hasCodes) { Text("Assign") }
+                Button(onClick = { pickAction = true; pickForLongPress = false }, enabled = hasCodes) { Text("Assign") }
             }
             Text("Repeats: ${button.action?.repeat ?: 1}", style = MaterialTheme.typography.labelMedium)
             Slider(
@@ -663,8 +899,7 @@ private fun PagesDialog(app: ForgeApp, remote: io.github.hackyday.irforge.data.R
                         if (remote.pages.size > 1) {
                             IconButton(onClick = {
                                 app.store.updateRemote(remote.id) { rr ->
-                                    val pages = rr.pages.filterNot { it.id == p.id }
-                                    rr.copy(pages = pages)
+                                    rr.copy(pages = rr.pages.filterNot { it.id == p.id })
                                 }
                             }) { Icon(Icons.Filled.Delete, "Delete page") }
                         }
@@ -673,7 +908,7 @@ private fun PagesDialog(app: ForgeApp, remote: io.github.hackyday.irforge.data.R
                 Spacer(Modifier.height(8.dp))
                 Button(onClick = {
                     app.store.updateRemote(remote.id) { rr ->
-                        rr.copy(pages = rr.pages + io.github.hackyday.irforge.data.Page(id = newId(), name = "Page ${rr.pages.size + 1}"))
+                        rr.copy(pages = rr.pages + Page(id = newId(), name = "Page ${rr.pages.size + 1}"))
                     }
                 }) { Text("➕ Add page") }
             }
@@ -686,7 +921,7 @@ private fun PagesDialog(app: ForgeApp, remote: io.github.hackyday.irforge.data.R
 private fun TemplateDialog(
     app: ForgeApp,
     remote: io.github.hackyday.irforge.data.Remote,
-    codes: List<io.github.hackyday.irforge.data.Code>,
+    codes: List<Code>,
     onDismiss: () -> Unit,
 ) {
     AlertDialog(
@@ -712,9 +947,8 @@ private fun TemplateDialog(
                                 bgStart = t.bgStart,
                                 bgEnd = t.bgEnd,
                                 pages = remote.pages.firstOrNull()?.let { first ->
-                                    listOf(first.copy(name = first.name, buttons = t.slots.map { slotToButton(it) })) +
-                                        remote.pages.drop(1)
-                                } ?: listOf(io.github.hackyday.irforge.data.Page(id = newId(), buttons = t.slots.map { slotToButton(it) })),
+                                    listOf(first.copy(buttons = t.slots.map { slotToButton(it) })) + remote.pages.drop(1)
+                                } ?: listOf(Page(id = newId(), buttons = t.slots.map { slotToButton(it) })),
                             )
                             val (assigned, _) = if (codes.isNotEmpty()) assignCodesToRemote(rebuilt, codes) else rebuilt to 0
                             app.store.upsertRemote(assigned)
@@ -727,4 +961,100 @@ private fun TemplateDialog(
         confirmButton = {},
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun GroupPropsSheet(
+    app: ForgeApp,
+    rid: String,
+    pageId: String,
+    ids: Set<String>,
+    first: RButton,
+    onDismiss: () -> Unit,
+    onAssignClick: () -> Unit,
+    onDeleteClick: () -> Unit,
+    onAlign: (String) -> Unit,
+) {
+    fun editSelected(transform: (RButton) -> RButton) =
+        app.store.updatePage(rid, pageId) { p ->
+            p.copy(buttons = p.buttons.map { if (it.id in ids) transform(it) else it })
+        }
+
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        Column(Modifier.padding(horizontal = 16.dp).verticalScroll(rememberScrollState())) {
+            Text("${ids.size} buttons selected", style = MaterialTheme.typography.titleMedium)
+            Spacer(Modifier.height(10.dp))
+
+            Text("Alignment", style = MaterialTheme.typography.labelMedium)
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                listOf("left" to "Left", "top" to "Top", "right" to "Right", "bottom" to "Bottom", "size" to "Size").forEach { (mode, label) ->
+                    Button(
+                        onClick = { onAlign(mode) },
+                        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 10.dp),
+                    ) { Text(label, maxLines = 1, style = MaterialTheme.typography.labelSmall) }
+                }
+            }
+            Spacer(Modifier.height(8.dp))
+
+            Text("Shape", style = MaterialTheme.typography.labelMedium)
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                ButtonShape.entries.forEach { s ->
+                    Button(
+                        onClick = { editSelected { it.copy(shape = s) } },
+                        colors = androidx.compose.material3.ButtonDefaults.buttonColors(
+                            containerColor = if (first.shape == s) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant,
+                        ),
+                        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp),
+                    ) {
+                        Text(s.name.lowercase().replaceFirstChar { it.uppercase() }, maxLines = 1, style = MaterialTheme.typography.labelSmall)
+                    }
+                }
+            }
+            Spacer(Modifier.height(8.dp))
+
+            Text("Fill color", style = MaterialTheme.typography.labelMedium)
+            ColorSwatchRow(first.fillStart, allowCustom = false) { v ->
+                editSelected { it.copy(fillStart = v) }
+            }
+            Text("Text color", style = MaterialTheme.typography.labelMedium)
+            ColorSwatchRow(first.textColor, allowCustom = false) { v ->
+                editSelected { it.copy(textColor = v) }
+            }
+
+            Text("Opacity", style = MaterialTheme.typography.labelMedium)
+            Slider(
+                value = first.opacity,
+                onValueChange = { v -> editSelected { it.copy(opacity = v) } },
+                valueRange = 0.1f..1f,
+            )
+            Text("Font size", style = MaterialTheme.typography.labelMedium)
+            Slider(
+                value = first.fontSize,
+                onValueChange = { v -> editSelected { it.copy(fontSize = v.coerceIn(12f, 90f)) } },
+                valueRange = 12f..90f,
+            )
+
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                TextButton(onClick = { editSelected { it.copy(haptic = true) } }) { Text("Haptic ON") }
+                TextButton(onClick = { editSelected { it.copy(haptic = false) } }) { Text("Haptic OFF") }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                TextButton(onClick = { editSelected { it.copy(holdRepeat = true) } }) { Text("Hold repeat ON") }
+                TextButton(onClick = { editSelected { it.copy(holdRepeat = false) } }) { Text("Hold repeat OFF") }
+            }
+
+            Spacer(Modifier.height(4.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Button(onClick = onAssignClick) { Text("Assign code to all") }
+                Spacer(Modifier.width(8.dp))
+                TextButton(onClick = { editSelected { it.copy(action = null) } }) { Text("Clear actions") }
+            }
+            Spacer(Modifier.height(8.dp))
+            TextButton(onClick = onDeleteClick) {
+                Text("Delete ${ids.size} buttons", color = Color(0xFFEF5350))
+            }
+            Spacer(Modifier.height(24.dp))
+        }
+    }
 }
