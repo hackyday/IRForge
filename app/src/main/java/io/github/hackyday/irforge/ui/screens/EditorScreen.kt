@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
@@ -176,6 +177,8 @@ fun EditorScreen(app: ForgeApp, nav: NavController, rid: String, initialSelect: 
                 }
             }
             val density = LocalDensity.current
+            var guideV by remember { mutableStateOf<Float?>(null) }
+            var guideH by remember { mutableStateOf<Float?>(null) }
             Column(
                 Modifier
                     .fillMaxSize()
@@ -187,12 +190,74 @@ fun EditorScreen(app: ForgeApp, nav: NavController, rid: String, initialSelect: 
                     .onSizeChanged { canvasW = it.width },
             ) {
                 val scale = canvasW.toFloat() / CANVAS_W
+
+                /** Magnetic snap: grid first, then align to sibling edges / margins / center. */
+                fun snapWithGuides(x: Float, y: Float, w: Float, h: Float, selfId: String): Pair<Float, Float> {
+                    var nx = if (gridSnap) snap(x) else x
+                    var ny = if (gridSnap) snap(y) else y
+                    var gv: Float? = null
+                    var gh: Float? = null
+                    val tol = 12f
+                    val xs = mutableListOf(40f, 540f, 1040f)
+                    val ys = mutableListOf(40f)
+                    for (o in page.buttons) {
+                        if (o.id == selfId) continue
+                        xs.add(o.x); xs.add(o.x + o.w)
+                        ys.add(o.y); ys.add(o.y + o.h)
+                    }
+                    for (cand in xs) {
+                        if (kotlin.math.abs(nx - cand) <= tol) { nx = cand; gv = cand; break }
+                        if (kotlin.math.abs(nx + w - cand) <= tol) { nx = cand - w; gv = cand; break }
+                    }
+                    for (cand in ys) {
+                        if (kotlin.math.abs(ny - cand) <= tol) { ny = cand; gh = cand; break }
+                        if (kotlin.math.abs(ny + h - cand) <= tol) { ny = cand - h; gh = cand; break }
+                    }
+                    guideV = gv
+                    guideH = gh
+                    return nx to ny
+                }
+
                 val baseMax = page.buttons.maxOfOrNull { b ->
                     val adj = resizeAdj?.takeIf { it.first == b.id }?.second
                     (adj?.second ?: b.h) + (dragAdj?.takeIf { it.first == b.id }?.second?.second ?: b.y)
                 } ?: 600f
                 val canvasH = (baseMax + 140f) * scale
                 Box(Modifier.fillMaxWidth().height(with(density) { canvasH.toDp() })) {
+                    // Grid appears while dragging or resizing.
+                    if ((dragAdj != null || resizeAdj != null) && gridSnap) {
+                        androidx.compose.foundation.Canvas(Modifier.matchParentSize()) {
+                            val step = 40f * scale
+                            var gx = 0f
+                            while (gx <= size.width) {
+                                drawLine(androidx.compose.ui.graphics.Color.White.copy(alpha = 0.05f),
+                                    androidx.compose.ui.geometry.Offset(gx, 0f), androidx.compose.ui.geometry.Offset(gx, size.height), 1f)
+                                gx += step
+                            }
+                            var gy = 0f
+                            while (gy <= size.height) {
+                                drawLine(androidx.compose.ui.graphics.Color.White.copy(alpha = 0.05f),
+                                    androidx.compose.ui.geometry.Offset(0f, gy), androidx.compose.ui.geometry.Offset(size.width, gy), 1f)
+                                gy += step
+                            }
+                        }
+                    }
+                    guideV?.let { vx ->
+                        Box(
+                            Modifier
+                                .offset { androidx.compose.ui.unit.IntOffset((vx * scale).toInt(), 0) }
+                                .fillMaxHeight().width(1.5.dp)
+                                .background(androidx.compose.ui.graphics.Color(0x88FF5252)),
+                        )
+                    }
+                    guideH?.let { hy ->
+                        Box(
+                            Modifier
+                                .offset { androidx.compose.ui.unit.IntOffset(0, (hy * scale).toInt()) }
+                                .fillMaxWidth().height(1.5.dp)
+                                .background(androidx.compose.ui.graphics.Color(0x88FF5252)),
+                        )
+                    }
                     for (b in page.buttons) {
                         val drag = dragAdj?.takeIf { it.first == b.id }?.second
                         val rs = resizeAdj?.takeIf { it.first == b.id }?.second
@@ -219,19 +284,31 @@ fun EditorScreen(app: ForgeApp, nav: NavController, rid: String, initialSelect: 
                                         onDrag = { change, amt ->
                                             change.consume()
                                             val cur = dragAdj?.takeIf { it.first == b.id }?.second ?: (b.x to b.y)
-                                            dragAdj = b.id to ((cur.first + amt.x / scale) to (cur.second + amt.y / scale))
+                                            val rawX = (cur.first + amt.x / scale).coerceIn(0f, 1040f)
+                                            val rawY = (cur.second + amt.y / scale).coerceIn(0f, 5000f)
+                                            val (sx, sy) = snapWithGuides(rawX, rawY, b.w, b.h, b.id)
+                                            dragAdj = b.id to (sx to sy)
                                         },
                                         onDragEnd = {
                                             dragAdj?.takeIf { it.first == b.id }?.let { (_, xy) ->
                                                 app.store.updateButton(rid, page.id, b.id) {
-                                                    it.copy(x = snap(xy.first).coerceAtLeast(0f), y = snap(xy.second).coerceAtLeast(0f))
+                                                    it.copy(x = xy.first, y = xy.second)
                                                 }
                                             }
                                             dragAdj = null
+                                            guideV = null
+                                            guideH = null
+                                        },
+                                        onDragCancel = {
+                                            dragAdj = null
+                                            guideV = null
+                                            guideH = null
                                         },
                                     )
                                 }
-                                .clickable { selectedId = b.id },
+                                .pointerInput(b.id, page.id) {
+                                    detectTapGestures(onTap = { selectedId = b.id })
+                                },
                         ) {
                             RemoteButtonView(
                                 button = display,
@@ -242,30 +319,49 @@ fun EditorScreen(app: ForgeApp, nav: NavController, rid: String, initialSelect: 
                             )
                         }
 
-                        // Resize handle (bottom-right of the selected button)
+                        // Resize handle (bottom-right corner of the selected button)
                         if (isSel) {
                             Box(
                                 Modifier
-                                    .offset { androidx.compose.ui.unit.IntOffset(((bx + bw) * scale - 18).toInt(), ((by + bh) * scale - 18).toInt()) }
-                                    .size(20.dp)
+                                    .offset { androidx.compose.ui.unit.IntOffset(((bx + bw) * scale - 26).toInt(), ((by + bh) * scale - 26).toInt()) }
+                                    .size(26.dp)
                                     .background(MaterialTheme.colorScheme.primary, CircleShape)
+                                    .border(2.dp, androidx.compose.ui.graphics.Color.White, CircleShape)
                                     .pointerInput(b.id, page.id, gridSnap) {
                                         detectDragGestures(
                                             onDrag = { change, amt ->
                                                 change.consume()
                                                 val cur = resizeAdj?.takeIf { it.first == b.id }?.second ?: (b.w to b.h)
-                                                resizeAdj = b.id to ((cur.first + amt.x / scale).coerceAtLeast(60f) to (cur.second + amt.y / scale).coerceAtLeast(50f))
+                                                val nw = (cur.first + amt.x / scale).coerceAtLeast(60f)
+                                                val nh = (cur.second + amt.y / scale).coerceAtLeast(50f)
+                                                resizeAdj = b.id to ((if (gridSnap) snap(nw) else nw) to (if (gridSnap) snap(nh) else nh))
                                             },
                                             onDragEnd = {
                                                 resizeAdj?.takeIf { it.first == b.id }?.let { (_, wh) ->
                                                     app.store.updateButton(rid, page.id, b.id) {
-                                                        it.copy(w = snap(wh.first), h = snap(wh.second))
+                                                        it.copy(w = wh.first, h = wh.second)
                                                     }
                                                 }
                                                 resizeAdj = null
                                             },
+                                            onDragCancel = { resizeAdj = null },
                                         )
                                     },
+                            )
+                        }
+                    }
+                    // Live coordinates while dragging
+                    dragAdj?.let { (_, xy) ->
+                        androidx.compose.material3.Surface(
+                            color = androidx.compose.ui.graphics.Color(0xCC12131A),
+                            shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp),
+                            modifier = Modifier.align(Alignment.TopStart).padding(8.dp),
+                        ) {
+                            Text(
+                                "x ${xy.first.toInt()}   y ${xy.second.toInt()}",
+                                Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                color = androidx.compose.ui.graphics.Color.White,
+                                style = MaterialTheme.typography.labelSmall,
                             )
                         }
                     }
