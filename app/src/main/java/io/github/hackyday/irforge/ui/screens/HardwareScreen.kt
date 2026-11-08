@@ -29,6 +29,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -99,6 +100,33 @@ fun HardwareScreen(app: ForgeApp, nav: NavController) {
                             "usb" -> Column {
                                 if (usbCandidates.isEmpty()) {
                                     Text("Plug in a USB IR blaster (IR Toy v2, FTDI, CH340, CP210x, CDC-ACM).", style = MaterialTheme.typography.bodySmall)
+                                }
+                                Text("Screen flip while using USB", style = MaterialTheme.typography.labelMedium)
+                                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                    listOf("off" to "Off", "flip180" to "180°", "landscape" to "90°", "revlandscape" to "90°+180").forEach { (k, label) ->
+                                        OutlinedButton(
+                                            onClick = { app.store.updateSettings { it.copy(usbFlipMode = k) } },
+                                            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp),
+                                        ) {
+                                            Text(if (settings.usbFlipMode == k) "● $label" else label, maxLines = 1, style = MaterialTheme.typography.labelSmall)
+                                        }
+                                    }
+                                    var testing by remember { mutableStateOf(false) }
+                                    if (testing) {
+                                        LaunchedEffect(Unit) {
+                                            var c: android.content.Context = ctx
+                                            while (c is android.content.ContextWrapper && c !is android.app.Activity) c = c.baseContext
+                                            val a = c as? android.app.Activity
+                                            android.util.Log.d("FlipTest", "activity=" + (a != null))
+                                            a?.requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_REVERSE_PORTRAIT
+                                            kotlinx.coroutines.delay(3000)
+                                            a?.requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+                                            testing = false
+                                        }
+                                    }
+                                    OutlinedButton(onClick = { testing = true }, enabled = !testing) {
+                                        Text(if (testing) "…" else "Test flip")
+                                    }
                                 }
                                 for (c in usbCandidates) {
                                     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {

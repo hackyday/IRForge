@@ -103,5 +103,7 @@ data class Settings(
     val auxMode: String = "envelope", // envelope | raw
     val auxChannelSwap: Boolean = false,
     val auxTested: Boolean = false,
+    val usbFlip: String = "landscape", // legacy
+    val usbFlipMode: String = "flip180", // off | flip180 | landscape | revlandscape
     val firstRunDone: Boolean = false,
 )

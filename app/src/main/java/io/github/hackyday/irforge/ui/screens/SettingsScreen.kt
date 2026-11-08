@@ -121,6 +121,22 @@ fun SettingsScreen(app: ForgeApp, nav: NavController) {
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth(),
                     )
+                    Text("USB blaster screen flip", style = MaterialTheme.typography.labelMedium)
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        listOf("off" to "Off", "flip180" to "180°", "landscape" to "90°", "revlandscape" to "90°+180").forEach { (k, label) ->
+                            OutlinedButton(
+                                onClick = { app.store.updateSettings { it.copy(usbFlipMode = k) } },
+                                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 10.dp),
+                            ) {
+                                Text(if (settings.usbFlipMode == k) "● $label" else label, maxLines = 1, style = MaterialTheme.typography.labelSmall)
+                            }
+                        }
+                    }
+                    Text(
+                        "Rotates the screen to landscape while a USB IR blaster is the active transmitter.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                     OutlinedTextField(
                         value = carrierText,
                         onValueChange = { v ->

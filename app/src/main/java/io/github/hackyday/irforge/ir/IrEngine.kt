@@ -55,6 +55,17 @@ class IrEngine(private val ctx: Context, private val store: Store) {
             .let { list -> if (pref.isEmpty()) list else list.sortedByDescending { it.key == pref } }
     }
 
+    /** True when a USB blaster is plugged in AND is the transmitter that would be used. */
+    suspend fun usbInUse(): Boolean {
+        val pref = preferredKey(null)
+        val usbReady = usb.scan().any { it.kind != "unsupported" }
+        return when {
+            pref == "usb" && usbReady -> true
+            pref.isNotEmpty() -> false   // a different explicit transmitter is preferred
+            else -> usbReady && !builtin.available()   // auto order: builtin -> usb -> aux
+        }
+    }
+
     suspend fun transmit(freqHz: Int, patternUs: IntArray, repeats: Int = 1, remoteId: String? = null): String? {
         val freq = store.settings.value.carrierOverrideHz.takeIf { it > 0 } ?: freqHz
         val pattern = sanitize(patternUs.toList())

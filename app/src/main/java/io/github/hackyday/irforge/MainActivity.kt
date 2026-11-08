@@ -2,10 +2,14 @@ package io.github.hackyday.irforge
 
 import android.content.Intent
 import android.net.Uri
+import android.content.pm.ActivityInfo
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.LaunchedEffect
 import io.github.hackyday.irforge.data.Code
 import io.github.hackyday.irforge.data.newId
 import io.github.hackyday.irforge.importer.Importers
@@ -22,6 +26,20 @@ class MainActivity : ComponentActivity() {
         val app = application as ForgeApp
         handleImportIntent(intent)
         setContent {
+            // Auto-flip: rotate to landscape while a USB IR blaster is the active transmitter
+            val settings by app.store.settings.collectAsState()
+            LaunchedEffect(settings.usbFlipMode) {
+                while (true) {
+                    val inUse = app.irEngine.usbInUse()
+                    requestedOrientation = when {
+                        !inUse || settings.usbFlipMode == "off" -> ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+                        settings.usbFlipMode == "flip180" -> ActivityInfo.SCREEN_ORIENTATION_REVERSE_PORTRAIT
+                        settings.usbFlipMode == "landscape" -> ActivityInfo.SCREEN_ORIENTATION_USER_LANDSCAPE
+                        else -> ActivityInfo.SCREEN_ORIENTATION_REVERSE_LANDSCAPE
+                    }
+                    kotlinx.coroutines.delay(1000)
+                }
+            }
             ForgeTheme(app.store) { AppNav(app) }
         }
     }
