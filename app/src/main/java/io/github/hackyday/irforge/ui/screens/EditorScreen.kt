@@ -24,6 +24,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.GridOn
 import androidx.compose.material.icons.filled.MoreVert
@@ -78,7 +79,7 @@ private val QUICK_EMOJI = listOf("🔌", "🔊", "🔉", "🔇", "▲", "▼", "
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun EditorScreen(app: ForgeApp, nav: NavController, rid: String) {
+fun EditorScreen(app: ForgeApp, nav: NavController, rid: String, initialSelect: String = "") {
     val remotes by app.store.remotes.collectAsState()
     val codes by app.store.codes.collectAsState()
     val macros by app.store.macros.collectAsState()
@@ -88,7 +89,7 @@ fun EditorScreen(app: ForgeApp, nav: NavController, rid: String) {
         return
     }
     var pageIdx by remember(rid) { mutableStateOf(0) }
-    var selectedId by remember(rid) { mutableStateOf<String?>(null) }
+    var selectedId by remember(rid) { mutableStateOf(initialSelect.ifEmpty { null }) }
     var dragAdj by remember { mutableStateOf<Pair<String, Pair<Float, Float>>?>(null) } // id -> (x,y)
     var resizeAdj by remember { mutableStateOf<Pair<String, Pair<Float, Float>>?>(null) } // id -> (w,h)
     var gridSnap by remember { mutableStateOf(true) }
@@ -137,6 +138,40 @@ fun EditorScreen(app: ForgeApp, nav: NavController, rid: String) {
                             onClick = { pageIdx = i; selectedId = null },
                             text = { Text(p.name) },
                         )
+                    }
+                }
+            }
+            // One-tap bridge from imported codes to this remote's unassigned buttons.
+            val unassigned = page.buttons.count { it.action == null }
+            val hasExtrasPage = r.pages.any { it.name == "Extras" }
+            var autoFillHidden by remember(rid) { mutableStateOf(false) }
+            if (codes.isNotEmpty() && unassigned > 0 && !hasExtrasPage && !autoFillHidden) {
+                androidx.compose.material3.Card(
+                    Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
+                    colors = androidx.compose.material3.CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.secondary.copy(alpha = 0.15f),
+                    ),
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(start = 12.dp)) {
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                "$unassigned button(s) have no code yet",
+                                style = MaterialTheme.typography.labelLarge,
+                            )
+                            Text(
+                                "${codes.size} codes in the library",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        Button(onClick = {
+                            val (assigned, _) = assignCodesToRemote(r, codes)
+                            app.store.upsertRemote(assigned)
+                            autoFillHidden = true
+                        }) { Text("Auto-fill") }
+                        IconButton(onClick = { autoFillHidden = true }) {
+                            Icon(Icons.Filled.Close, "Dismiss")
+                        }
                     }
                 }
             }
@@ -198,7 +233,13 @@ fun EditorScreen(app: ForgeApp, nav: NavController, rid: String) {
                                 }
                                 .clickable { selectedId = b.id },
                         ) {
-                            RemoteButtonView(button = display, remote = r, fontSizePx = b.fontSize * scale, modifier = Modifier.fillMaxSize())
+                            RemoteButtonView(
+                                button = display,
+                                remote = r,
+                                fontSizePx = b.fontSize * scale,
+                                showUnassignedBadge = b.action == null,
+                                modifier = Modifier.fillMaxSize(),
+                            )
                         }
 
                         // Resize handle (bottom-right of the selected button)

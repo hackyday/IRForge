@@ -84,6 +84,7 @@ fun RemoteViewScreen(app: ForgeApp, nav: NavController, rid: String) {
     var txMenu by remember { mutableStateOf(false) }
     var favDialog by remember { mutableStateOf(false) }
     var errDialog by remember { mutableStateOf<String?>(null) }
+    var assignDialog by remember { mutableStateOf<RButton?>(null) }
     var canvasW by remember { mutableStateOf(1080) }
 
     val page = r.pages.getOrNull(pageIdx) ?: r.pages.firstOrNull() ?: return
@@ -94,9 +95,9 @@ fun RemoteViewScreen(app: ForgeApp, nav: NavController, rid: String) {
         } ?: "No TX"
     }
 
-    suspend fun sendAction(action: Action?) {
+    suspend fun sendAction(action: Action?, button: RButton? = null) {
         val a = action ?: run {
-            errDialog = "No action assigned to this button yet.\n\nTap the pencil (edit) above, select the button, then \"Assign\" a code or macro."
+            assignDialog = button
             return
         }
         when (a.type) {
@@ -165,7 +166,7 @@ fun RemoteViewScreen(app: ForgeApp, nav: NavController, rid: String) {
                             remote = r,
                             scale = scale,
                             settings = settings,
-                            onSend = { action -> sendAction(action) },
+                            onSend = { action, btn -> sendAction(action, btn) },
                             onPressStart = { if (b.haptic) PressFeedback.haptic(ctx, settings) },
                         )
                     }
@@ -180,6 +181,26 @@ fun RemoteViewScreen(app: ForgeApp, nav: NavController, rid: String) {
             confirmButton = { TextButton(onClick = { errDialog = null }) { Text("OK") } },
             title = { Text("Transmit") },
             text = { Text(msg) },
+        )
+    }
+
+    if (assignDialog != null) {
+        val b = assignDialog!!
+        AlertDialog(
+            onDismissRequest = { assignDialog = null },
+            title = { Text("Button \"${b.label}\" has no code yet") },
+            text = {
+                Text(
+                    "Assign one of your imported codes to it (look for the orange ! marks in the editor), or use Auto-fill to wire the whole remote in one tap.",
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    assignDialog = null
+                    nav.navigate("editor/$rid?btn=${b.id}")
+                }) { Text("Assign now") }
+            },
+            dismissButton = { TextButton(onClick = { assignDialog = null }) { Text("Later") } },
         )
     }
 
@@ -220,7 +241,7 @@ private fun RemotePlayButton(
     remote: io.github.hackyday.irforge.data.Remote,
     scale: Float,
     settings: io.github.hackyday.irforge.data.Settings,
-    onSend: suspend (Action?) -> Unit,
+    onSend: suspend (Action?, RButton?) -> Unit,
     onPressStart: () -> Unit,
 ) {
     val interaction = remember(button.id) { MutableInteractionSource() }
@@ -248,9 +269,9 @@ private fun RemotePlayButton(
                     try { awaitRelease() } finally { tapPressed = false }
                 },
                 onLongPress = {
-                    if (button.longPress != null) { onPressStart(); scope.launch { onSend(button.longPress) } }
+                    if (button.longPress != null) { onPressStart(); scope.launch { onSend(button.longPress, button) } }
                 },
-                onTap = { onPressStart(); scope.launch { onSend(button.action) } },
+                onTap = { onPressStart(); scope.launch { onSend(button.action, button) } },
             )
         }
     }
@@ -270,6 +291,7 @@ private fun RemotePlayButton(
             button = button,
             remote = remote,
             fontSizePx = button.fontSize * scale,
+            showUnassignedBadge = button.action == null,
             modifier = Modifier.fillMaxSize(),
         )
         if (pressed) {
@@ -285,10 +307,10 @@ private fun RemotePlayButton(
         LaunchedEffect(pressed, button.id) {
             if (pressed) {
                 onPressStart()
-                onSend(button.action)
+                onSend(button.action, button)
                 while (true) {
                     delay(150)
-                    onSend(button.action)
+                    onSend(button.action, button)
                 }
             }
         }

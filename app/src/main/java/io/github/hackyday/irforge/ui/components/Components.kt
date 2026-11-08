@@ -53,6 +53,7 @@ fun RemoteButtonView(
     button: RButton,
     remote: Remote,
     fontSizePx: Float = 34f,
+    showUnassignedBadge: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     val start = parseColor(button.fillStart)
@@ -87,6 +88,18 @@ fun RemoteButtonView(
                     textAlign = TextAlign.Center,
                     maxLines = 2,
                 )
+            }
+        }
+        if (showUnassignedBadge) {
+            Box(
+                Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(4.dp)
+                    .size(18.dp)
+                    .background(Color(0xFFF9A825), CircleShape),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text("!", color = Color(0xFF101216), fontSize = 12.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.Bold)
             }
         }
     }

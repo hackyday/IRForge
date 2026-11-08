@@ -15,15 +15,11 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.CopyAll
-import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.MoreVert
-import androidx.compose.material.icons.filled.Tv
+import androidx.compose.material.icons.filled.NoteAdd
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.Card
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
@@ -49,9 +45,8 @@ import androidx.navigation.NavController
 import io.github.hackyday.irforge.ForgeApp
 import io.github.hackyday.irforge.data.Remote
 import io.github.hackyday.irforge.editor.TEMPLATES
-import io.github.hackyday.irforge.editor.blankTemplate
-import io.github.hackyday.irforge.editor.gridTemplate
 import io.github.hackyday.irforge.editor.templateById
+import kotlinx.coroutines.launch
 
 private val DEVICE_ICONS = mapOf(
     "tv" to "📺", "stb" to "📡", "audio" to "🔊", "fan" to "🌀",
@@ -62,28 +57,56 @@ private val DEVICE_ICONS = mapOf(
 @Composable
 fun HomeScreen(app: ForgeApp, nav: NavController) {
     val remotes by app.store.remotes.collectAsState()
+    val settings by app.store.settings.collectAsState()
     var showNew by remember { mutableStateOf(false) }
     var menuFor by remember { mutableStateOf<Remote?>(null) }
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
+
+    if (!settings.firstRunDone) {
+        WelcomeDialog(app, nav, ctx, scope)
+    }
 
     Scaffold(
         topBar = { TopAppBar(title = { Text("IRForge") }) },
         floatingActionButton = {
-            FloatingActionButton(onClick = { showNew = true }) { Icon(Icons.Filled.Add, "New remote") }
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp), horizontalAlignment = Alignment.End) {
+                if (remotes.isNotEmpty()) {
+                    androidx.compose.material3.ExtendedFloatingActionButton(
+                        onClick = { nav.navigate("import") },
+                        icon = { Icon(Icons.Filled.NoteAdd, null) },
+                        text = { Text("Import") },
+                    )
+                }
+                FloatingActionButton(onClick = { showNew = true }) { Icon(Icons.Filled.Add, "New remote") }
+            }
         },
     ) { pad ->
         Column(Modifier.padding(pad).fillMaxSize()) {
             if (remotes.isEmpty()) {
                 Column(
-                    Modifier.fillMaxSize().padding(32.dp),
+                    Modifier.fillMaxSize().padding(28.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.Center,
                 ) {
                     Text("🎮", style = MaterialTheme.typography.displayLarge)
                     Spacer(Modifier.height(12.dp))
-                    Text("No remotes yet", fontWeight = FontWeight.Bold)
+                    Text("No remotes yet", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleLarge)
+                    Spacer(Modifier.height(16.dp))
+                    Button(onClick = { showNew = true }, modifier = Modifier.fillMaxWidth()) {
+                        Text("🛠  Create a remote from a template")
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    androidx.compose.material3.OutlinedButton(
+                        onClick = { nav.navigate("import") },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text("📥  Import my .ir files")
+                    }
+                    Spacer(Modifier.height(6.dp))
                     Text(
-                        "Create one from a template, or import .ir files in the Codes tab.",
-                        style = MaterialTheme.typography.bodyMedium,
+                        "Supports Flipper Zero / Bruce .ir, LIRC, Pronto hex, CSV",
+                        style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
@@ -91,6 +114,7 @@ fun HomeScreen(app: ForgeApp, nav: NavController) {
                 LazyColumn(Modifier.fillMaxSize().padding(horizontal = 12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     items(remotes, key = { it.id }) { remote ->
                         val buttons = remote.pages.sumOf { it.buttons.size }
+                        val unassigned = remote.pages.sumOf { p -> p.buttons.count { it.action == null } }
                         Card(
                             Modifier.fillMaxWidth().clickable { nav.navigate("remote/${remote.id}") },
                             shape = RoundedCornerShape(16.dp),
@@ -100,9 +124,13 @@ fun HomeScreen(app: ForgeApp, nav: NavController) {
                                 Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
                                     Text(remote.name, fontWeight = FontWeight.Bold)
                                     Text(
-                                        "$buttons buttons · ${remote.pages.size} page(s)",
+                                        buildString {
+                                            append("$buttons buttons · ${remote.pages.size} page(s)")
+                                            if (unassigned > 0) append(" · $unassigned to assign")
+                                        },
                                         style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        color = if (unassigned > 0) MaterialTheme.colorScheme.secondary
+                                        else MaterialTheme.colorScheme.onSurfaceVariant,
                                     )
                                 }
                                 IconButton(onClick = { menuFor = remote }) { Icon(Icons.Filled.MoreVert, "Menu") }
@@ -153,6 +181,39 @@ fun HomeScreen(app: ForgeApp, nav: NavController) {
             )
         }
     }
+}
+
+@Composable
+private fun WelcomeDialog(app: ForgeApp, nav: NavController, ctx: android.content.Context, scope: kotlinx.coroutines.CoroutineScope) {
+    var busy by remember { mutableStateOf(false) }
+    AlertDialog(
+        onDismissRequest = { app.store.updateSettings { it.copy(firstRunDone = true) } },
+        title = { Text("Welcome to IRForge 👋") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text("1️⃣  Import your .ir files  (Codes tab → Import)")
+                Text("2️⃣  Create a remote from a template")
+                Text("3️⃣  Tap a button → assign a code → blast!")
+                if (busy) Text("Loading demo…", color = MaterialTheme.colorScheme.secondary)
+            }
+        },
+        confirmButton = {
+            TextButton(enabled = !busy, onClick = {
+                busy = true
+                app.store.updateSettings { it.copy(firstRunDone = true) }
+                scope.launch {
+                    val (_, remoteId) = io.github.hackyday.irforge.importer.DemoImporter.load(ctx, app.store)
+                    if (remoteId != null) nav.navigate("editor/$remoteId")
+                }
+            }) { Text("⚡ Load demo remote") }
+        },
+        dismissButton = {
+            TextButton(enabled = !busy, onClick = {
+                app.store.updateSettings { it.copy(firstRunDone = true) }
+                nav.navigate("import")
+            }) { Text("📥 Import my files") }
+        },
+    )
 }
 
 @Composable

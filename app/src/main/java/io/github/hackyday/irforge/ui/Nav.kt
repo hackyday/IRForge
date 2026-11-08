@@ -84,8 +84,14 @@ fun AppNav(app: ForgeApp) {
             composable("remote/{rid}") { entry ->
                 RemoteViewScreen(app, nav, entry.arguments?.getString("rid") ?: "")
             }
-            composable("editor/{rid}") { entry ->
-                EditorScreen(app, nav, entry.arguments?.getString("rid") ?: "")
+            composable(
+                "editor/{rid}?btn={btn}",
+                arguments = listOf(androidx.navigation.navArgument("btn") {
+                    type = androidx.navigation.NavType.StringType
+                    defaultValue = ""
+                }),
+            ) { entry ->
+                EditorScreen(app, nav, entry.arguments?.getString("rid") ?: "", entry.arguments?.getString("btn") ?: "")
             }
             composable("import") { ImportScreen(app, nav) }
             composable("runmacro/{mid}") { entry ->

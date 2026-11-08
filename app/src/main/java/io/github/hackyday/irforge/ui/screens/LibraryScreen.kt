@@ -14,9 +14,10 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
-import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.NoteAdd
+import androidx.compose.material.icons.filled.PlaylistAdd
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
@@ -55,11 +56,14 @@ import java.io.File
 @Composable
 fun LibraryScreen(app: ForgeApp, nav: NavController) {
     val codes by app.store.codes.collectAsState()
+    val remotes by app.store.remotes.collectAsState()
     var query by remember { mutableStateOf("") }
     var renameFor by remember { mutableStateOf<Code?>(null) }
     var renameText by remember { mutableStateOf("") }
+    var renameTag by remember { mutableStateOf("") }
     var tagFor by remember { mutableStateOf<Code?>(null) }
     var tagText by remember { mutableStateOf("") }
+    var addToRemoteFor by remember { mutableStateOf<Code?>(null) }
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
     val snackbar = remember { SnackbarHostState() }
@@ -94,7 +98,13 @@ fun LibraryScreen(app: ForgeApp, nav: NavController) {
                 },
             )
         },
-        floatingActionButton = { FloatingActionButton(onClick = { nav.navigate("import") }) { Icon(Icons.Filled.Add, "Import") } },
+        floatingActionButton = {
+            androidx.compose.material3.ExtendedFloatingActionButton(
+                onClick = { nav.navigate("import") },
+                icon = { Icon(Icons.Filled.NoteAdd, null) },
+                text = { Text("Import .ir files") },
+            )
+        },
     ) { pad ->
         Column(Modifier.padding(pad).fillMaxSize()) {
             OutlinedTextField(
@@ -121,14 +131,14 @@ fun LibraryScreen(app: ForgeApp, nav: NavController) {
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
                             }
+                            IconButton(onClick = { addToRemoteFor = c }) { Icon(Icons.Filled.PlaylistAdd, "Add to a remote") }
                             IconButton(onClick = {
                                 scope.launch {
                                     val err = app.irEngine.sendCode(c)
                                     if (err != null) snackbar.showSnackbar(err)
                                 }
                             }) { Icon(Icons.AutoMirrored.Filled.Send, "Test send") }
-                            IconButton(onClick = { renameFor = c; renameText = c.name }) { Icon(Icons.Filled.Edit, "Rename") }
-                            IconButton(onClick = { tagFor = c; tagText = c.tag }) { Text("#") }
+                            IconButton(onClick = { renameFor = c; renameText = c.name; renameTag = c.tag }) { Icon(Icons.Filled.Edit, "Rename / tag") }
                             IconButton(onClick = { app.store.deleteCode(c.id) }) { Icon(Icons.Filled.Delete, "Delete") }
                         }
                     }
@@ -137,13 +147,64 @@ fun LibraryScreen(app: ForgeApp, nav: NavController) {
         }
     }
 
+    addToRemoteFor?.let { code ->
+        AlertDialog(
+            onDismissRequest = { addToRemoteFor = null },
+            title = { Text("Add \"${code.name}\" to a remote") },
+            text = {
+                Column {
+                    if (remotes.isEmpty()) {
+                        Text("No remotes yet — create one first (Remotes tab → +).")
+                    } else {
+                        Text(
+                            "It becomes a new button on the remote's first page:",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        for (r in remotes) {
+                            Text(
+                                "${r.name}  (${r.pages.firstOrNull()?.buttons?.size ?: 0} buttons)",
+                                Modifier.fillMaxWidth().clickable {
+                                    val page = r.pages.firstOrNull() ?: return@clickable
+                                    val maxY = page.buttons.maxOfOrNull { it.y + it.h } ?: 0f
+                                    val idx = page.buttons.size
+                                    val b = io.github.hackyday.irforge.data.RButton(
+                                        id = app.store.newId(),
+                                        label = code.name.take(14),
+                                        x = 40f + (idx % 3) * 340f,
+                                        y = if (maxY > 0f) maxY + 40f else 40f,
+                                        w = 300f, h = 160f,
+                                        action = io.github.hackyday.irforge.data.Action(type = "code", id = code.id),
+                                    )
+                                    app.store.updatePage(r.id, page.id) { it.copy(buttons = it.buttons + b) }
+                                    addToRemoteFor = null
+                                    scope.launch { snackbar.showSnackbar("Added to \"${r.name}\" — Main page") }
+                                }.padding(vertical = 10.dp),
+                            )
+                        }
+                    }
+                }
+            },
+            confirmButton = {},
+            dismissButton = { TextButton(onClick = { addToRemoteFor = null }) { Text("Cancel") } },
+        )
+    }
+
     renameFor?.let { c ->
         AlertDialog(
             onDismissRequest = { renameFor = null },
-            title = { Text("Rename code") },
-            text = { OutlinedTextField(value = renameText, onValueChange = { renameText = it }, singleLine = true) },
+            title = { Text("Rename / tag") },
+            text = {
+                Column {
+                    OutlinedTextField(value = renameText, onValueChange = { renameText = it }, label = { Text("Name") }, singleLine = true)
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedTextField(value = renameTag, onValueChange = { renameTag = it }, label = { Text("Device tag (optional)") }, singleLine = true)
+                }
+            },
             confirmButton = {
-                TextButton(onClick = { app.store.upsertCode(c.copy(name = renameText.ifBlank { c.name })); renameFor = null }) { Text("Save") }
+                TextButton(onClick = {
+                    app.store.upsertCode(c.copy(name = renameText.ifBlank { c.name }, tag = renameTag)); renameFor = null
+                }) { Text("Save") }
             },
             dismissButton = { TextButton(onClick = { renameFor = null }) { Text("Cancel") } },
         )

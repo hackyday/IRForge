@@ -51,6 +51,23 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
+@Composable
+private fun ImportCard(icon: String, title: String, subtitle: String, onClick: () -> Unit) {
+    Card(Modifier.fillMaxWidth().clickable { onClick() }, shape = androidx.compose.foundation.shape.RoundedCornerShape(14.dp)) {
+        Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text(icon, Modifier.padding(end = 14.dp), style = MaterialTheme.typography.headlineMedium)
+            Column {
+                Text(title, style = MaterialTheme.typography.titleMedium)
+                Text(
+                    subtitle,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
+}
+
 data class ImportCandidate(
     val name: String,
     val freqHz: Int,
@@ -129,33 +146,40 @@ fun ImportScreen(app: ForgeApp, nav: NavController) {
 
     Scaffold(snackbarHost = { SnackbarHost(snackbar) }) { pad ->
         Column(Modifier.padding(pad).fillMaxSize().padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            TopAppBar(title = { Text("Import IR codes") })
-            Text(
-                "Supported: Flipper Zero / Bruce .ir (your SmartLim files), LIRC .conf, Pronto hex, CSV, JSON.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(onClick = { pickFiles.launch(arrayOf("*/*")) }) { Text("📁 Pick files") }
-                OutlinedButton(onClick = { pickFolder.launch(null) }) { Text("🗂 Pick folder") }
-            }
-            OutlinedButton(onClick = {
-                scope.launch {
-                    val text = withContext(Dispatchers.IO) {
-                        ctx.assets.open("smartlim_combined.ir").bufferedReader().use { it.readText() }
-                    }
-                    val parsed = Importers.parse("smartlim_combined.ir", text)
-                    candidates = parsed.map { c ->
-                        ImportCandidate(c.name, c.freqHz, c.pattern, c.sourceFormat, duplicate = codes.any { it.pattern == c.pattern })
+            TopAppBar(title = { Text("Import .ir files") })
+            if (candidates.isEmpty()) {
+                Text(
+                    "Step 1 — choose where your codes come from",
+                    style = MaterialTheme.typography.titleSmall,
+                )
+                ImportCard("📁", "Pick files", "One or more .ir / LIRC / Pronto / CSV / JSON files") {
+                    pickFiles.launch(arrayOf("*/*"))
+                }
+                ImportCard("🗂", "Pick a folder", "Batch-import every IR file inside a folder") {
+                    pickFolder.launch(null)
+                }
+                ImportCard("🧞", "SmartLim demo", "16 ready-made buttons — try the app in one tap") {
+                    scope.launch {
+                        val (n, remoteId) = io.github.hackyday.irforge.importer.DemoImporter.load(ctx, app.store)
+                        snackbar.showSnackbar(if (n > 0) "Demo imported: $n new codes" else "Demo codes were already in your library")
+                        remoteId?.let { id -> nav.navigate("editor/$id") }
                     }
                 }
-            }) { Text("🧞 Load bundled SmartLim demo (16 buttons)") }
-
-            if (busy) Text("Parsing…", color = MaterialTheme.colorScheme.secondary)
-
-            if (candidates.isNotEmpty()) {
-                Text("${candidates.count { it.selected }} of ${candidates.size} selected", style = MaterialTheme.typography.labelLarge)
-                Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+                Text(
+                    "Tip: you can also share a .ir file to IRForge from any file manager.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            } else {
+                Text(
+                    "Step 2 — review & import",
+                    style = MaterialTheme.typography.titleSmall,
+                )
+                Text(
+                    "${candidates.count { it.selected }} of ${candidates.size} selected",
+                    style = MaterialTheme.typography.labelLarge,
+                )
+                Column(Modifier.weight(1f).verticalScroll(rememberScrollState())) {
                     candidates.forEachIndexed { i, c ->
                         Card(Modifier.fillMaxWidth().padding(vertical = 3.dp)) {
                             Row(Modifier.padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -175,39 +199,54 @@ fun ImportScreen(app: ForgeApp, nav: NavController) {
                             }
                         }
                     }
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Checkbox(checked = autoRemote, onCheckedChange = { autoRemote = it })
-                        Text("Auto-create remote from imported codes")
-                    }
-                    Button(
-                        onClick = {
-                            val sel = candidates.filter { it.selected }
-                            val savedList = ArrayList<Code>(sel.size)
-                            for (c in sel) {
-                                val code = Code(
-                                    id = newId(), name = c.name, freqHz = c.freqHz,
-                                    pattern = c.pattern, source = "import", sourceFormat = c.format,
-                                    createdAt = System.currentTimeMillis(),
+                }
+                Card(Modifier.fillMaxWidth()) {
+                    Column(Modifier.padding(10.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Checkbox(checked = autoRemote, onCheckedChange = { autoRemote = it })
+                            Column {
+                                Text("Also create a remote with these codes", style = MaterialTheme.typography.labelLarge)
+                                Text(
+                                    "Codes are matched to the template buttons automatically",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
-                                app.store.upsertCode(code)
-                                savedList.add(code)
                             }
-                            var newRemoteId: String? = null
-                            if (autoRemote && savedList.isNotEmpty()) {
-                                val remote = buildFromTemplate(templateById("tv"), savedList.first().name.ifBlank { "Imported remote" })
-                                val (assigned, _) = io.github.hackyday.irforge.editor.assignCodesToRemote(remote, savedList)
-                                app.store.upsertRemote(assigned)
-                                newRemoteId = assigned.id
-                            }
-                            candidates = emptyList()
-                            scope.launch { snackbar.showSnackbar("Imported ${sel.size} codes") }
-                            newRemoteId?.let { id -> nav.navigate("editor/$id") }
-                        },
-                        enabled = candidates.any { it.selected },
-                        modifier = Modifier.fillMaxWidth(),
-                    ) { Text("Import selected") }
+                        }
+                        Button(
+                            onClick = {
+                                val sel = candidates.filter { it.selected }
+                                val savedList = ArrayList<Code>(sel.size)
+                                for (c in sel) {
+                                    val code = Code(
+                                        id = newId(), name = c.name, freqHz = c.freqHz,
+                                        pattern = c.pattern, source = "import", sourceFormat = c.format,
+                                        createdAt = System.currentTimeMillis(),
+                                    )
+                                    app.store.upsertCode(code)
+                                    savedList.add(code)
+                                }
+                                var newRemoteId: String? = null
+                                if (autoRemote && savedList.isNotEmpty()) {
+                                    val remote = buildFromTemplate(templateById("tv"), savedList.first().name.ifBlank { "Imported remote" })
+                                    val (assigned, _) = io.github.hackyday.irforge.editor.assignCodesToRemote(remote, savedList)
+                                    app.store.upsertRemote(assigned)
+                                    newRemoteId = assigned.id
+                                }
+                                candidates = emptyList()
+                                scope.launch { snackbar.showSnackbar("Imported ${sel.size} codes") }
+                                newRemoteId?.let { id -> nav.navigate("editor/$id") }
+                            },
+                            enabled = candidates.any { it.selected },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) { Text("Import ${candidates.count { it.selected }} codes") }
+                        TextButton(onClick = { candidates = emptyList() }, modifier = Modifier.fillMaxWidth()) {
+                            Text("← Choose different files")
+                        }
+                    }
                 }
             }
+            if (busy) Text("Parsing…", color = MaterialTheme.colorScheme.secondary)
         }
     }
 
